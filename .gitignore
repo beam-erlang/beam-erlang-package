@@ -1,0 +1,6 @@
+/build/
+/install/
+CMakeUserPresets.json
+__pycache__/
+*.py[cod]
+erl_crash.dump
