@@ -5,9 +5,14 @@ compilation recipe, command-behavior tests and [package-format proposal](docs/pa
 BEAM/Erlang supplies the native executable, relative `beam-pkg` alias and execution
 host, and bundles a selected build of this tool in its installed distribution.
 
-The tool is an experimental scaffold. Help, version and argument handling work;
-build, install and tree report “not implemented”. Manifest parsing, archives,
-installation and project launching are deferred. See [commands](docs/commands.md).
+The experimental local builder produces Erlang/native archives and locks from
+ordinary libraries and local source/archive execution dependencies. Native builds
+use package-owned CMake recipes and the installed NIF SDK. The explicit workflow
+is `beam build .`, `beam-pkg install .`, then `beam run --project .`. Installed
+projects run on BEAM with standard I/O and declared native bindings. Tree remains
+a stub. Whole OTP application recipes and compiler
+plugins are deferred. See [commands](docs/commands.md) and
+[package format](docs/package-format.md).
 
 ## Build and test independently
 
@@ -27,10 +32,13 @@ and produces only the tool payload under `lib/beam/tools/pkg`. Installation writ
 that payload to the explicitly selected destination; it does not install a runtime
 or launcher. The payload is not a `.bpkg.tar.gz` package and requires no package manager.
 
-Tests create a disposable prefix containing copies of the selected executable,
-`libbeam.so`, the boot component and only the newly compiled tool payload. They
-exercise fresh and relocated prefixes without OTP applications or compiler tooling
-at execution time. They never replace the tool in the supplied SDK. Python 3.9+
+Command tests create a minimal disposable prefix containing the executable,
+runtime, boot component and only freshly compiled package-tool bytecode. Build
+tests copy the selected SDK, replace only the disposable package payload, then
+exercise source/archive/native graphs and OTP-free building after relocation.
+The tiny NIF is also executed through retained OTP before those assets are removed.
+Project tests cover immutable installation, failures, I/O and tool-free relocated
+execution. No suite modifies the supplied SDK. Python 3.11+
 is a test dependency; no tests or helpers are imported from another repository.
 
 ## Distribution integration
@@ -45,7 +53,7 @@ No external Erlang, automatic fetching or self-hosting is involved.
 
 The host currently embeds an exact module inventory. Rebuild it against the selected
 sources when adding or removing tool modules. The private Erlang entry receives
-`{DistributionIdentityBinary, ArgumentBinaries}` and uses `beam_output` and `beam_boot`
+`{{Identity, Prefix, WorkingDirectory, SearchPath}, ArgumentBinaries}` and uses `beam_output` and `beam_boot`
 for output and completion. This is a matching-build development contract, not a
 public plugin API or a promise that arbitrary tool/runtime releases interoperate.
 The two compiler paths are tested for behavior, not byte-for-byte equality.
@@ -61,7 +69,10 @@ Framework manifests stay with their implementation sources; consumer manifests a
 future workloads stay in the playground. The format preserves one complete OTP
 application per package. The modern BEAM host's overlap with STDLIB-owned modules
 remains unresolved, so the draft Erlangsters dependency graph is not executable yet.
-Native hosting and `beam run --project` belong to the distribution. Historical format
+Installed project shell accepts library roots without an entry. Source-only
+`[scripts]` tasks use literal argv and native exec hosting after tool cleanup.
+Native hosting, `beam run --project`, `beam shell --project` and `beam task`
+dispatch belong to the distribution. Historical format
 candidates remain workspace reference notes rather than competing specifications.
 
 The extracted command policy retains its Apache-2.0 license. See [LICENSE.txt](LICENSE.txt).

@@ -17,7 +17,7 @@ install(FILES "${_inventory}" DESTINATION lib/beam/tools/pkg)
 
 include(CTest)
 if(BUILD_TESTING)
-    find_package(Python3 3.9 REQUIRED COMPONENTS Interpreter)
+    find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
     add_test(NAME package-commands
         COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/commands.py"
             --beam $<TARGET_FILE:BEAM::CLI>
@@ -26,4 +26,28 @@ if(BUILD_TESTING)
             --payload "${_payload}"
             --work "${CMAKE_CURRENT_BINARY_DIR}/checks")
     set_tests_properties(package-commands PROPERTIES TIMEOUT 180)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME package-builds
+        COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/builds.py"
+            --beam $<TARGET_FILE:BEAM::CLI> --payload "${_payload}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/build-checks")
+    set_tests_properties(package-builds PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME package-projects
+        COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/projects.py"
+            --beam $<TARGET_FILE:BEAM::CLI> --payload "${_payload}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/project-checks")
+    set_tests_properties(package-projects PROPERTIES TIMEOUT 600)
+endif()
+
+if(BUILD_TESTING)
+    add_test(NAME package-tasks
+        COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/tasks.py"
+            --beam $<TARGET_FILE:BEAM::CLI> --payload "${_payload}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/task-checks")
+    set_tests_properties(package-tasks PROPERTIES TIMEOUT 300)
 endif()

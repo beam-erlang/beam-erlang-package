@@ -51,8 +51,8 @@ def check_commands(prefix, work, identity):
         invoke(arguments, 0, 'usage: beam-pkg <command> [args]')
     for command in ('help', 'version', 'build', 'install', 'tree'):
         invoke(['help', command], 0, f'usage: beam-pkg {command}')
-    invoke(['version'], 0, identity + '\nbeam-pkg: experimental scaffold; package operations are not implemented\n')
-    for command in ('build', 'install', 'tree'):
+    invoke(['version'], 0, identity + '\nbeam-pkg: experimental local packages; tree is not implemented\n')
+    for command in ('tree',):
         for tail in ([], ['.'], [str(work / 'project λ')], ['missing 日本語'], ['./-literal'], ['$(touch unwanted)']):
             invoke([command, *tail], 2, f'beam-pkg: {command}: not implemented (experimental scaffold)\n')
         for tail in ([''], ['--option'], ['one', 'two']):
@@ -83,8 +83,9 @@ def main():
     (prefix / 'bin/beam-pkg').symlink_to('beam')
     payload = prefix / 'lib/beam/tools/pkg'
     shutil.copytree(args.payload, payload)
-    assert (payload / 'modules.txt').read_text() == 'beam_pkg\n'
-    assert {p.name for p in (payload / 'ebin').iterdir()} == {'beam_pkg.beam'}
+    modules = (args.payload / 'modules.txt').read_text().splitlines()
+    assert (payload / 'modules.txt').read_text().splitlines() == modules
+    assert {p.name for p in (payload / 'ebin').iterdir()} == {name + '.beam' for name in modules}
     assert (payload / 'ebin/beam_pkg.beam').read_bytes() == (args.payload / 'ebin/beam_pkg.beam').read_bytes()
     work = root / 'unrelated work 日本語'
     project = work / 'project λ'
