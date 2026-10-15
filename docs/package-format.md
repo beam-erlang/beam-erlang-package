@@ -7,9 +7,13 @@ builds ordinary libraries, local execution-dependency graphs and CMake native
 outputs into archives and locks. `beam-pkg install` materializes the locked selection;
 `beam run --project` executes it on BEAM. Dependency-tree display remains a stub. See [commands](commands.md).
 
-Each OTP framework package describes one complete application. Kernel/STDLIB
-build recipes, externalization and the overlap between STDLIB and BEAM-owned
-modules remain unresolved. Their draft manifests and the
+The separate OTP distribution will assemble its own environment around
+`libbeam`; this experimental format is not its required delivery mechanism.
+See the [runtime strategy](../../beam-erlang/docs/runtime-evolution-strategy.md).
+Existing OTP package drafts each describe one complete application.
+Kernel/STDLIB package build recipes and the overlap between STDLIB and BEAM-owned
+modules remain unresolved. Those recipes are not prerequisites for the OTP
+distribution milestone. The draft manifests and the
 [counter consumers](../../beam-erlang/docs/framework-consumers.md) are not
 currently buildable compositions. Never replace a complete OTP application with
 selected-module packages to bypass this boundary.
@@ -216,7 +220,8 @@ distribution prefix, not a bundled executable/runtime.
 
 The Erlangsters framework drafts still depend on complete STDLIB, whose modules
 overlap with the current BEAM host; STDLIB retains its Kernel dependency. The OTP
-counter draft requires retained Kernel/STDLIB. Neither becomes runnable through
+counter draft records retained Kernel/STDLIB requirements; the future OTP
+consumer targets the separate distribution. Neither draft becomes runnable through
 this workflow. Registry access, version solving, whole-application recipes,
 build-time plugins, OTP project launching and independent native release
 compatibility remain deferred. Historical format candidates remain unchanged.

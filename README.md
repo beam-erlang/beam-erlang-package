@@ -66,9 +66,13 @@ checks. Never disable acceptance or use a floating download to hide missing sour
 ## Ownership and scope
 
 Framework manifests stay with their implementation sources; consumer manifests and
-future workloads stay in the playground. The format preserves one complete OTP
-application per package. The modern BEAM host's overlap with STDLIB-owned modules
-remains unresolved, so the draft Erlangsters dependency graph is not executable yet.
+future workloads stay in the playground. The format is independently revisable;
+it does not prescribe assembly of the separate OTP distribution described in the
+[runtime strategy](../beam-erlang/docs/runtime-evolution-strategy.md). Existing
+OTP package drafts preserve one complete application per package. Their build
+recipes are not prerequisites for the distribution milestone. The modern BEAM
+host's overlap with STDLIB-owned modules remains unresolved, so the draft
+Erlangsters dependency graph is not executable yet.
 Installed project shell accepts library roots without an entry. Source-only
 `[scripts]` tasks use literal argv and native exec hosting after tool cleanup.
 Native hosting, `beam run --project`, `beam shell --project` and `beam task`

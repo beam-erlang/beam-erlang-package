@@ -17,7 +17,9 @@ package-format proposal. Native hosting belongs to `beam-erlang`.
 - The private host pins the tool module inventory. Inventory changes require a matching
   distribution rebuild; this is not a public plugin or release-compatibility interface.
 - Keep ordinary package and OTP application boundaries in `docs/package-format.md`.
-  One complete OTP application maps to one package. Do not bypass the unresolved
+  The format is independently revisable; delivering OTP as BEAM packages is not
+  a prerequisite for the separate OTP distribution. Existing OTP package drafts
+  retain one complete application per package. Do not bypass the unresolved
   BEAM/STDLIB ownership conflict with subsets or duplicate providers.
 - Keep framework and consumer manifests with their sources. Historical workspace
   candidates remain historical; update active guidance when ownership changes.
