@@ -28,7 +28,8 @@ command(Context={beam_context,1,_,_,_,_,Root,_,_,_,Bytes}, Arguments) ->
             {beam_command,1,{run,D1,term_to_binary(Arguments)}}
     end.
 
-operate({beam_context,1,_,Prefix,Identity,Build,_,Cwd,Search,<<"posix">>,_}, Arguments) ->
+operate({beam_context,1,_,Prefix,Identity,Build,_,Cwd,Search,Platform,_}, Arguments)
+  when Platform =:= <<"posix">>; Platform =:= <<"windows">> ->
     put(command_name, <<"beam-pkg">>),
     Context = {Identity,Prefix,Cwd,Search},
     try dispatch([utf8(A) || A <- Arguments], Context, Build)

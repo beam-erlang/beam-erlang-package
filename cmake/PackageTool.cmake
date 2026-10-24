@@ -26,7 +26,7 @@ function(beam_package_build TARGET)
     endforeach()
     string(JOIN "\n" _inventory ${_modules})
     file(CONFIGURE OUTPUT "${PKG_OUTPUT_DIRECTORY}/modules.txt"
-        CONTENT "${_inventory}\n" @ONLY)
+        CONTENT "${_inventory}\n" NEWLINE_STYLE UNIX @ONLY)
     if(NOT PKG_DESCRIPTOR_TOOL OR NOT PKG_RUNTIME_BUILD_ID)
         message(FATAL_ERROR "${TARGET}: provide DESCRIPTOR_TOOL and RUNTIME_BUILD_ID")
     endif()

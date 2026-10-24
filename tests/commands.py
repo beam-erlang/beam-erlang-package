@@ -8,20 +8,13 @@ import shutil
 import signal
 import stat
 import subprocess
+from process import capture
 
 
 def run(command, work, env, expected=0):
-    child = subprocess.Popen([str(value) for value in command], cwd=work, env=env,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, start_new_session=True)
-    try:
-        stdout, stderr = child.communicate(timeout=20)
-    except BaseException:
-        os.killpg(child.pid, signal.SIGKILL)
-        child.communicate()
-        raise
-    assert child.returncode == expected, (command, child.returncode, stdout, stderr)
-    return stdout.decode('utf-8'), stderr.decode('utf-8')
+    result = capture(command, cwd=work, env=env, text=False, timeout=20)
+    assert result.returncode == expected, (command, result.returncode, result.stdout, result.stderr)
+    return result.stdout.decode('utf-8'), result.stderr.decode('utf-8')
 
 
 def snapshot(root):
@@ -86,7 +79,10 @@ def main():
         work = root / 'unrelated work 日本語'
         project = work / 'project λ'
         project.mkdir(parents=True)
-        os.mkfifo(project / 'beam.toml')  # Reading this manifest would block.
+        if os.name == 'nt':
+            (project / 'beam.toml').mkdir()  # Cannot be read as a manifest file.
+        else:
+            os.mkfifo(project / 'beam.toml')  # Reading this manifest would block.
         (project / 'beam.lock').write_text('unchanged sentinel\n')
         env = os.environ.copy()
         for key in list(env):

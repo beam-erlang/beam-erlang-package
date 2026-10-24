@@ -1,0 +1,3 @@
+# Hash-attested sources and artifacts retain their exact committed bytes.
+# Disable checkout newline conversion on every development platform.
+* -text

@@ -16,7 +16,7 @@
          text/1]).
 %% Publish immutable archives first; replace the root selection only on success.
 run(Directory, Context) -> run(Directory,Context,beam_pkg_target:select(Context,undefined)).
-run(Directory, _Context = {_, _, Cwd, _}, Target) ->
+run(Directory, Context = {_, _, Cwd, _}, Target) ->
     Root = path(Cwd, Directory),
     _ = manifest(Root),
     CMake = map_get(cmake, Target),
@@ -36,7 +36,8 @@ run(Directory, _Context = {_, _, Cwd, _}, Target) ->
           store => Store,
           root => Root,
           cmake => CMake,
-          sdk => SDK},
+          sdk => SDK,
+          context => Context},
     try
         {Node, Final} = source(Root, State),
         Selected = map_get(selected, Final),
@@ -493,6 +494,17 @@ native(N, D, Stage, S, F) ->
                 true -> []; false -> fail("target SDK has no supported consumer toolchain") end;
         _ -> fail("invalid installed consumer toolchain")
     end,
+    NativeTools = case map_get(<<"system">>,T) of
+        <<"Windows">> ->
+            Context = map_get(context,S),
+            [<<"-G">>,<<"Ninja">> |
+                [<<"-D",Variable/binary,"=",(beam_pkg_util:tool(Name,Context))/binary>> ||
+                    {Variable,Name} <- [{<<"CMAKE_MAKE_PROGRAM">>,<<"ninja">>},
+                        {<<"CMAKE_C_COMPILER">>,<<"cl">>},{<<"CMAKE_CXX_COMPILER">>,<<"cl">>},
+                        {<<"CMAKE_LINKER">>,<<"link">>},{<<"CMAKE_AR">>,<<"lib">>},
+                        {<<"CMAKE_RC_COMPILER">>,<<"rc">>}]]];
+        _ -> []
+    end,
     diagnostic(beam_pkg_util:command(C,
                                      [<<"-S">>,
                                       path(D, map_get(<<"cmake">>, N)),
@@ -509,7 +521,7 @@ native(N, D, Stage, S, F) ->
                                       <<"-DCMAKE_PREFIX_PATH=",
                                         (map_get(target_prefix, S))/binary>>,
                                       <<"-DCMAKE_INSTALL_PREFIX=",
-                                        Install/binary>>] ++ Toolchain,
+                                        Install/binary>>] ++ Toolchain ++ NativeTools,
                                      D)),
     diagnostic(beam_pkg_util:command(C, [<<"--build">>, B], D)),
     diagnostic(beam_pkg_util:command(C, [<<"--install">>, B], D)),

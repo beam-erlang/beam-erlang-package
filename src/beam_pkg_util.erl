@@ -91,10 +91,28 @@ join([H | T], S) ->
                        [S, X] ||
                            X <- T
                       ]]).
-path(_Base, <<"/",_/binary>> = P) ->
-    normalize(P);
 path(Base, P) ->
-    normalize(<<Base/binary,"/",P/binary>>).
+    case erlang:system_info(os_type) of
+        {win32, _} -> windows_path(slashes(Base), slashes(P));
+        _ -> case P of
+            <<"/",_/binary>> -> normalize(P);
+            _ -> normalize(<<Base/binary,"/",P/binary>>)
+        end
+    end.
+slashes(P) -> << <<(case C of $\\ -> $/; _ -> C end)>> || <<C>> <= P >>.
+windows_path(_, <<D,$:,$/,Rest/binary>>) when D >= $A, D =< $Z ->
+    windows_path(<<>>, <<(D+32),$:,$/,Rest/binary>>);
+windows_path(_, <<D,$:,$/,Rest/binary>>) when D >= $a, D =< $z ->
+    <<D,$:,$/,(join(reverse(parts(split(Rest,$/),[])),$/))/binary>>;
+windows_path(_, <<"//",Rest/binary>>) ->
+    case split(Rest,$/) of
+        [Server,Share|Tail] when Server =/= <<>>, Share =/= <<>> ->
+            <<"//",Server/binary,"/",Share/binary,"/",(join(reverse(parts(Tail,[])),$/))/binary>>;
+        _ -> fail("Windows UNC paths require a server and share")
+    end;
+windows_path(_, <<"/",_/binary>>) -> fail("Windows paths require an absolute drive or UNC share");
+windows_path(<<>>, _) -> fail("Windows paths require an absolute drive or UNC share");
+windows_path(Base, P) -> windows_path(<<>>, <<Base/binary,"/",P/binary>>).
 normalize(P) ->
     <<"/",(join(reverse(parts(split(P, $/), [])), $/))/binary>>.
 parts([], A) ->
@@ -111,12 +129,14 @@ parts([H | T], A) ->
     parts(T, [H | A]).
 base(P) ->
     hd(reverse(split(P, $/))).
+parent(<<D,$:,$/>>) -> <<D,$:,$/>>;
 parent(P) ->
     case reverse(split(P, $/)) of
         [_ | T] ->
             case join(reverse(T), $/) of
                 <<>> ->
                     <<"/">>;
+                <<D,$:>> -> <<D,$:,$/>>;
                 B ->
                     B
             end
@@ -247,11 +267,15 @@ remove(P) ->
 text(T) ->
     beam_format:term(T, #{depth => 12, bytes => 4096}).
 tool(Name, {_, _, Cwd, Search}) ->
-    find_tool(Name,
+    Windows = case erlang:system_info(os_type) of {win32,_} -> true; _ -> false end,
+    Separator = case Windows of true -> $;; false -> $: end,
+    Executable = case Windows andalso not has_extension(Name) of true -> <<Name/binary,".exe">>; false -> Name end,
+    find_tool(Executable,
               [ 
                path(Cwd, D) ||
-                   D <- split(Search, $:)
+                   D <- split(Search, Separator)
               ]).
+has_extension(Name) -> length(split(base(slashes(Name)), $.)) > 1.
 find_tool(N, []) ->
     fail(["required executable not found: ", N]);
 find_tool(N, [D | T]) ->
