@@ -1,4 +1,5 @@
 """Run the freshly built tool with an installed matching BEAM host."""
+from scratch import scratch
 import argparse
 import hashlib
 import os
@@ -65,50 +66,45 @@ def check_commands(prefix, work, identity):
 
 def main():
     parser = argparse.ArgumentParser()
-    for option in ('beam', 'runtime', 'boot', 'payload', 'work'):
+    for option in ('beam', 'payload', 'work'):
         parser.add_argument('--' + option, type=Path, required=True)
     args = parser.parse_args()
     root = args.work.resolve()
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
-    prefix = root / 'fresh prefix'
-    (prefix / 'bin').mkdir(parents=True)
-    (prefix / 'lib').mkdir()
-    # Copy hosts, never symlink to the input prefix. Runtime discovery follows
-    # the copied libbeam location and must select only the new payload.
-    shutil.copy2(args.beam, prefix / 'bin/beam')
-    shutil.copy2(args.runtime, prefix / 'lib/libbeam.so')
-    shutil.copy2(args.boot, prefix / 'lib/libbeam-boot.so')
-    (prefix / 'bin/beam-pkg').symlink_to('beam')
-    payload = prefix / 'lib/beam/tools/pkg'
-    shutil.copytree(args.payload, payload)
-    modules = (args.payload / 'modules.txt').read_text().splitlines()
-    assert (payload / 'modules.txt').read_text().splitlines() == modules
-    assert {p.name for p in (payload / 'ebin').iterdir()} == {name + '.beam' for name in modules}
-    assert (payload / 'ebin/beam_pkg.beam').read_bytes() == (args.payload / 'ebin/beam_pkg.beam').read_bytes()
-    work = root / 'unrelated work 日本語'
-    project = work / 'project λ'
-    project.mkdir(parents=True)
-    os.mkfifo(project / 'beam.toml')  # Reading this manifest would block.
-    (project / 'beam.lock').write_text('unchanged sentinel\n')
-    env = os.environ.copy()
-    for key in list(env):
-        if key.startswith(('LD_', 'DYLD_')):
-            env.pop(key)
-    identity, error = run([prefix / 'bin/beam', 'version'], work, env)
-    assert not error
-    for destination in (None, root / 'relocated prefix 日本語'):
-        if destination:
-            prefix.rename(destination)
-            prefix = destination
-        check_commands(prefix, work, identity.strip())
-    # There is no installed-policy fallback when the newly built module is absent.
-    module = prefix / 'lib/beam/tools/pkg/ebin/beam_pkg.beam'
-    module.unlink()
-    out, err = run([prefix / 'bin/beam-pkg', 'help'], work, env, 1)
-    assert not out and 'beam_pkg' in err
-    print('Package command behavior passed with fresh, relocated and missing-policy payloads.')
+    with scratch(root):
+        prefix = root / 'fresh prefix'
+        shutil.copytree(args.beam.resolve().parent.parent,prefix,symlinks=True)
+        payload=prefix/'lib/beam/apps/beam-pkg'
+        shutil.rmtree(payload)
+        shutil.copytree(args.payload,payload)
+        modules = (args.payload / 'modules.txt').read_text().splitlines()
+        assert (payload / 'modules.txt').read_text().splitlines() == modules
+        assert {p.name for p in (payload / 'ebin').iterdir()} == {name + '.beam' for name in modules}
+        assert (payload / 'ebin/beam_pkg.beam').read_bytes() == (args.payload / 'ebin/beam_pkg.beam').read_bytes()
+        work = root / 'unrelated work 日本語'
+        project = work / 'project λ'
+        project.mkdir(parents=True)
+        os.mkfifo(project / 'beam.toml')  # Reading this manifest would block.
+        (project / 'beam.lock').write_text('unchanged sentinel\n')
+        env = os.environ.copy()
+        for key in list(env):
+            if key.startswith(('LD_', 'DYLD_')):
+                env.pop(key)
+        identity, error = run([prefix / 'bin/beam', 'version'], work, env)
+        assert not error
+        for destination in (None, root / 'relocated prefix 日本語'):
+            if destination:
+                prefix.rename(destination)
+                prefix = destination
+            check_commands(prefix, work, identity.strip())
+        # There is no installed-policy fallback when the newly built module is absent.
+        module = prefix / 'lib/beam/apps/beam-pkg/ebin/beam_pkg.beam'
+        module.unlink()
+        out, err = run([prefix / 'bin/beam-pkg', 'help'], work, env, 1)
+        assert not out and 'application' in err
+        print('Package command behavior passed with fresh, relocated and missing-policy payloads.')
 
 
 if __name__ == '__main__':

@@ -3,7 +3,7 @@
 include_guard(GLOBAL)
 
 function(beam_package_build TARGET)
-    cmake_parse_arguments(PARSE_ARGV 1 PKG "" "OUTPUT_DIRECTORY"
+    cmake_parse_arguments(PARSE_ARGV 1 PKG "" "OUTPUT_DIRECTORY;DESCRIPTOR_TOOL;RUNTIME_BUILD_ID"
         "COMPILER_COMMAND;COMPILER_DEPENDS")
     if(PKG_UNPARSED_ARGUMENTS OR NOT PKG_OUTPUT_DIRECTORY OR NOT PKG_COMPILER_COMMAND)
         message(FATAL_ERROR "${TARGET}: provide OUTPUT_DIRECTORY and COMPILER_COMMAND")
@@ -27,9 +27,35 @@ function(beam_package_build TARGET)
     string(JOIN "\n" _inventory ${_modules})
     file(CONFIGURE OUTPUT "${PKG_OUTPUT_DIRECTORY}/modules.txt"
         CONTENT "${_inventory}\n" @ONLY)
-    add_custom_target(${TARGET} DEPENDS ${_outputs})
+    if(NOT PKG_DESCRIPTOR_TOOL OR NOT PKG_RUNTIME_BUILD_ID)
+        message(FATAL_ERROR "${TARGET}: provide DESCRIPTOR_TOOL and RUNTIME_BUILD_ID")
+    endif()
+    set(_descriptor "${PKG_OUTPUT_DIRECTORY}/application.etf")
+    add_custom_command(OUTPUT "${_descriptor}"
+        COMMAND "${Python3_EXECUTABLE}" -B "${PKG_DESCRIPTOR_TOOL}" create
+            --root "${PKG_OUTPUT_DIRECTORY}" --inventory "${PKG_OUTPUT_DIRECTORY}/modules.txt"
+            --entry beam_pkg:command --contract command --name beam-pkg --version 2
+            --runtime-build "${PKG_RUNTIME_BUILD_ID}"
+            --service output
+            --output "${_descriptor}"
+        DEPENDS ${_outputs} "${PKG_OUTPUT_DIRECTORY}/modules.txt" "${PKG_DESCRIPTOR_TOOL}"
+        VERBATIM)
+    add_custom_target(${TARGET} ALL DEPENDS ${_outputs} "${_descriptor}")
     set_target_properties(${TARGET} PROPERTIES
         BEAM_PACKAGE_MODULES "${_modules}"
         BEAM_PACKAGE_FILES "${_outputs}"
-        BEAM_PACKAGE_INVENTORY "${PKG_OUTPUT_DIRECTORY}/modules.txt")
+        BEAM_PACKAGE_INVENTORY "${PKG_OUTPUT_DIRECTORY}/modules.txt"
+        BEAM_PACKAGE_DESCRIPTOR "${_descriptor}")
+endfunction()
+
+function(beam_package_install target launcher binding runtime)
+    get_target_property(_files "${target}" BEAM_PACKAGE_FILES)
+    get_target_property(_inventory "${target}" BEAM_PACKAGE_INVENTORY)
+    get_target_property(_descriptor "${target}" BEAM_PACKAGE_DESCRIPTOR)
+    install(FILES ${_files} DESTINATION lib/beam/apps/beam-pkg/ebin)
+    install(FILES "${_inventory}" "${_descriptor}" DESTINATION lib/beam/apps/beam-pkg)
+    install(PROGRAMS "${launcher}" DESTINATION bin RENAME "beam-pkg${CMAKE_EXECUTABLE_SUFFIX}")
+    set(_sidecar "${CMAKE_CURRENT_BINARY_DIR}/beam-pkg${CMAKE_EXECUTABLE_SUFFIX}.beam-launcher")
+    file(GENERATE OUTPUT "${_sidecar}" CONTENT "beam-launcher-v1\n${binding}\n${runtime}\n../lib/beam/apps/beam-pkg/application.etf\n")
+    install(FILES "${_sidecar}" DESTINATION bin)
 endfunction()

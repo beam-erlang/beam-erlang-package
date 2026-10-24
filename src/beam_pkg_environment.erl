@@ -12,7 +12,9 @@ install(Directory, Context = {_, _, Cwd, _}) ->
     Id = integer_to_binary(erlang:system_time(nanosecond)),
     Stage = path(Generations, <<"stage-", Id/binary>>),
     Final = path(Generations, Id),
-    Pointer = path(Base, <<"current-", Id/binary, ".tmp">>),
+    SDK=beam_pkg_toml:decode(read(path(element(2,Context), <<"lib/beam/sdk.toml">>))),
+    Current=pointer(Base,SDK),
+    Pointer = <<Current/binary,"-",Id/binary,".tmp">>,
     mkdir(Stage),
     try
         {RootNode, Nodes} = beam_pkg_build:locked(Root, Stage, Context),
@@ -23,14 +25,14 @@ install(Directory, Context = {_, _, Cwd, _}) ->
             beam_pkg_archive:extract(Files, path(Stage, Relative)),
             Relative
         end || _ := N <- Nodes},
-        Environment = #{<<"format">> => 1, <<"root">> => map_get(hash, RootNode),
-                        <<"packages">> => Packages},
+        Environment = #{<<"format">> => 2, <<"root">> => map_get(hash, RootNode),
+                        <<"packages">> => Packages, <<"sdk">> => SDK},
         write(path(Stage, <<"environment.toml">>), beam_pkg_toml:encode(Environment)),
         beam_pkg_util:remove(path(Stage, <<"archives">>)),
         beam_pkg_util:remove(path(Stage, <<"archive-input.bpkg.tar.gz">>)),
         rename(Stage, Final),
-        write(Pointer, beam_pkg_toml:encode(#{<<"format">> => 1, <<"generation">> => Id})),
-        rename(Pointer, path(Base, <<"current.toml">>)),
+        write(Pointer, beam_pkg_toml:encode(#{<<"format">> => 2, <<"generation">> => Id})),
+        rename(Pointer, Current),
         {ok, Final}
     after
         try beam_pkg_util:remove(Stage) catch _:_ -> ok end,
@@ -52,21 +54,29 @@ prepare({Context, Directory, HostModules, Purpose}) when Purpose =:= run; Purpos
 
 selection({_, Prefix, Cwd, _}, Directory, HostModules, Purpose) ->
     Base0 = path(path(Cwd, Directory), <<".beam">>),
-    case beam_pkg_util:info(path(Base0, <<"current.toml">>)) of
-        {ok, _} -> ok; _ -> fail("no installed selection; run beam-pkg install first")
+    SDK=beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>))),
+    Current=pointer(Base0,SDK),
+    Legacy=path(Base0,<<"current.toml">>),
+    Selected=case beam_pkg_util:info(Current) of
+        {ok,_} -> Current;
+        _ -> case beam_pkg_util:info(Legacy) of
+            {ok,_} -> case get(<<"format">>,beam_pkg_toml:decode(read(Legacy)),undefined) of
+                1 -> Legacy; _ -> fail("ambiguous old selection; install for this SDK") end;
+            _ -> fail("no installed selection; run beam-pkg install first") end
     end,
-    Base = directory(Base0),
-    Pointer = record(path(Base, <<"current.toml">>), [<<"format">>, <<"generation">>]),
+    Base=directory(Base0),
+    Pointer=record(Selected,[<<"format">>,<<"generation">>]),
     Id = beam_pkg_util:safe(get(<<"generation">>, Pointer, undefined)),
     case beam_pkg_util:split(Id, $/) of [_] -> ok; _ -> fail("invalid environment generation") end,
     Generation = directory(path(directory(path(Base, <<"environments">>)), Id)),
-    E = record(path(Generation, <<"environment.toml">>), [<<"format">>, <<"root">>, <<"packages">>]),
+    E = record(path(Generation, <<"environment.toml">>), [<<"format">>, <<"root">>, <<"packages">>, <<"sdk">>]),
     Root = beam_pkg_manifest:digest(get(<<"root">>, E, undefined)),
     Locations = get(<<"packages">>, E, #{}),
     case is_map(Locations) andalso map_size(Locations) > 0 andalso map_size(Locations) =< 1024 of
         true -> ok; false -> fail("invalid installed package count")
     end,
-    SDK = beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>))),
+    case get(<<"sdk">>,E,SDK) =:= SDK of
+        true -> ok; false -> fail("installed environment SDK/target mismatch") end,
     put({?MODULE, budget}, {0, 0}),
     Nodes = #{H => installed(H, Relative, Generation, SDK, HostModules) || H := Relative <- Locations},
     Seen = closure(Root, Nodes, [], #{}),
@@ -134,7 +144,7 @@ closure_edges([{Name, Edge} | Rest], Nodes, Visiting, Seen) ->
 
 record(P, Fields) ->
     M = beam_pkg_toml:decode(read(P)), beam_pkg_manifest:fields(M, Fields),
-    case get(<<"format">>, M, undefined) of 1 -> M; _ -> fail("unsupported environment format") end.
+    beam_pkg_manifest:format(M), M.
 directory(P) ->
     case beam_pkg_util:info(P) of
         {ok, #{type := directory}} -> P; _ -> fail(["not an installed directory: ", P])
@@ -172,3 +182,7 @@ installed_entries([Name | Rest], Root, Relative, Depth, Acc) ->
         _ -> fail(["not a bounded installed file: ", P])
     end,
     installed_entries(Rest, Root, Relative, Depth, Next).
+
+pointer(Base,SDK) ->
+    Build=beam_pkg_manifest:digest(get(<<"build-id">>,SDK,undefined)),
+    path(Base,<<"current-",Build/binary,".toml">>).

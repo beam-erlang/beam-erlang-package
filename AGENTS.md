@@ -14,7 +14,7 @@ package-format proposal. Native hosting belongs to `beam-erlang`.
   internal OTP-pinned bootstrap. Never substitute system Erlang, Rebar or a package fetch.
 - Tests use newly compiled payloads in disposable copied prefixes. Do not modify the
   input SDK or import tests/runtime sources from sibling repositories.
-- The private host pins the tool module inventory. Inventory changes require a matching
+- The generic application descriptor pins the tool module inventory. Inventory changes require a matching
   distribution rebuild; this is not a public plugin or release-compatibility interface.
 - Keep ordinary package and OTP application boundaries in `docs/package-format.md`.
   The format is independently revisable; delivering OTP as BEAM packages is not
@@ -43,7 +43,7 @@ package-format proposal. Native hosting belongs to `beam-erlang`.
 `beam shell --project .` opens an installed BEAM selection, including library
 roots without main/1. Preparation checks the complete interactive host inventory;
 execution uses public composition and explicit native activation with host I/O.
-Plain shell retains its OTP default. Project shell adds no filesystem, network,
+Plain shell uses the modern BEAM profile. Project shell adds no filesystem, network,
 program or implicit acquisition services. Never auto-build or install on launch.
 `beam task [--project dir] [name [-- args...]]` lists or executes root-manifest
 `[scripts]` literal argv arrays. Task policy belongs to beam-erlang-package;

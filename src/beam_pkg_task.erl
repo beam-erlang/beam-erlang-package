@@ -25,7 +25,7 @@ select(Root, Args) ->
         _ -> fail("missing or oversized task manifest")
     end,
     M = beam_pkg_toml:decode(read(File)),
-    case get(<<"format">>, M, undefined) of 1 -> ok; _ -> fail("unsupported package format") end,
+    beam_pkg_manifest:format(M),
     beam_pkg_manifest:identity(M),
     Tasks = scripts(get(<<"scripts">>, M, #{})),
     case Name of

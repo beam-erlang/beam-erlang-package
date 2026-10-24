@@ -1,8 +1,12 @@
-# First BEAM package format
+# BEAM package format 2
 
 ## Status and supported inputs
 
-This format is experimental and revisable. `beam build` (also `beam-pkg build`)
+This format is experimental and revisable. New archives, locks and installed
+selection records use format 2. Valid format-1 source manifests and concrete-path
+archives remain readable without rewriting their bytes. Format-1 locks describe
+one selection; matching native SDK checks still apply. Ambiguous or unsupported
+older records require an explicit rebuild/install. `beam build` (also `beam-pkg build`)
 builds ordinary libraries, local execution-dependency graphs and CMake native
 outputs into archives and locks. `beam-pkg install` materializes the locked selection;
 `beam run --project` executes it on BEAM. Dependency-tree display remains a stub. See [commands](commands.md).
@@ -28,7 +32,7 @@ arrays of tables are unsupported. Unsupported syntax, unknown schema fields and
 duplicate definitions fail. This is not a general TOML parser.
 
 ```toml
-format = 1
+format = 2
 [package]
 name = "example/math"
 version = "1.0.0"
@@ -48,7 +52,7 @@ modules = ["erlang"]
 
 Paths resolve relative to the manifest. Source inventories are explicit files;
 there is no globbing or implicit acquisition. Compilation uses the selected
-installed `beam --runtime=beam compile --deterministic --no-transforms`.
+installed `beam compile --deterministic --no-transforms`.
 Runtime dependency headers are made available through explicit include paths.
 Behavior-module inputs and compiler plugins are deferred: nonempty
 `build-dependencies` and source-declared parse/core transforms fail.
@@ -92,7 +96,7 @@ metadata. Imported `.app.src` files do not create startup requirements.
 Whole OTP application drafts retain their separate, currently unsupported form:
 
 ```toml
-format = 1
+format = 2
 [package]
 name = "otp/stdlib"
 version = "8.0"
@@ -113,9 +117,16 @@ instruction to compile a directory scan. Installation does not start application
 ```toml
 [build.native]
 cmake = "."
-outputs = ["priv/beam-glm.so"]
-nifs = { glm_raw = "priv/beam-glm.so" }
+outputs = ["glm"]
+nifs = { glm_raw = "glm" }
 ```
+
+A format-2 native output can be a logical name or an explicit `priv/` path.
+A recipe declares a logical output with
+`beam_package_native_output(target NAME logical_name)`. The SDK helper installs
+the target under `priv/` and records its actual filename in build-local metadata;
+it does not guess a platform suffix. Portable native metadata retains the
+logical-to-installed-path `identities` map and concrete output/NIF paths.
 
 One package-owned CMake recipe installs exactly the declared files under `priv/`
 in a private staging prefix. The builder supplies the selected SDK through
@@ -126,7 +137,7 @@ GLM vendors upstream headers and uses the installed `beam_target_nif(target)`
 CMake helper. The helper links the interface-only `BEAM::NIF` target and embeds a
 matching-build SDK descriptor without an absolute runtime-link path.
 
-Native builds currently support the host Linux interpreter and JIT prefixes.
+Native builds support matching host Linux and Darwin interpreter and JIT prefixes.
 Cross-compilation is rejected. Native metadata records output paths, the `cmake`
 recipe kind and matching SDK provenance (distribution identity, source/config
 build ID, OS, architecture, triple and flavor). Native archive dependencies must
@@ -174,8 +185,13 @@ command and stores archives as `build/beam-pkg/artifacts/<digest>.bpkg.tar.gz`.
 An explicit rebuild can select different bytes for the same name/version.
 Consumed archives are copied into that same local artifact store.
 
-`beam.lock` is generated TOML with `format = 1`, a `root` digest and an `artifacts`
-table keyed by actual digests. Each record contains `name`, `version`, a local
+`beam.lock` is generated TOML with `format = 2` and a `selections` table.
+Each key is `OS/architecture/flavor/build-id` from the exact selected SDK. Its
+record contains that `sdk`, a `root` digest and an `artifacts` table keyed by
+actual digests. A successful build replaces only its matching selection and
+preserves other validated target selections. Installation and companion-lock
+acquisition require the selected SDK's exact key; they never choose another
+flavor or target implicitly. Each record contains `name`, `version`, a local
 `archive` locator and exact `dependencies` edges. Locators are relative to the
 lock. No placeholder hashes or fake generated files are part of the format.
 
@@ -195,11 +211,13 @@ source manifests -> archives + beam.lock -> project-local .beam/ -> execution
 Installation reads only the lock and its selected archive closure, verifies every
 hash and edge, and extracts compiled packages into a private generation. Package
 locations are `packages/<archive-digest>` beneath that generation. A generated
-`environment.toml` contains `format = 1`, the root digest and a `packages` table
+`environment.toml` contains `format = 2`, the selected `sdk`, the root digest and a `packages` table
 mapping each selected digest to its relative location. After publishing the complete
-generation, installation atomically replaces `.beam/current.toml`, containing
-`format = 1` and its `generation` directory name. No illustrative fake hashes or
-pre-generated selections are supplied.
+generation, installation atomically replaces `.beam/current-<sdk-build-id>.toml`, containing
+`format = 2` and its `generation` directory name. No illustrative fake hashes or
+pre-generated selections are supplied. A missing target pointer may read an
+unambiguous legacy format-1 `current.toml`; a format-2 record at that legacy
+location is rejected. Native contents must still match the selected SDK.
 
 Successful generations are retained and treated as immutable. Failure removes
 staging without changing the old selection or lock. Concurrent publication into

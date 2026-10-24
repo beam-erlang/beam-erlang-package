@@ -43,10 +43,10 @@ run(Directory, Context = {_, Prefix, Cwd, _}) ->
         Selected = map_get(selected, Final),
         check_providers(Selected),
         Records = maps_records(Selected),
-        Lock =
-            #{<<"format">> => 1,
-              <<"root">> => map_get(hash, Node),
-              <<"artifacts">> => Records},
+        Selection = #{<<"root">> => map_get(hash, Node), <<"artifacts">> => Records, <<"sdk">> => SDK},
+        Previous = previous_selections(path(Root, <<"beam.lock">>)),
+        Lock = #{<<"format">> => 2, <<"selections">> =>
+            Previous#{(beam_pkg_manifest:target_key(SDK)) => Selection}},
         Pending = path(Stage, <<"beam.lock">>),
         write(Pending, beam_pkg_toml:encode(Lock)),
         case
@@ -124,8 +124,7 @@ source(D, S) ->
                  Src = path(D, P),
                  _ = read(Src),
                  diagnostic(beam_pkg_util:command(Compiler,
-                                                  [<<"--runtime=beam">>,
-                                                   <<"compile">>,
+                                                  [<<"compile">>,
                                                    <<"--deterministic">>,
                                                    <<"--no-transforms">>,
                                                    <<"-o">>,
@@ -156,7 +155,7 @@ source(D, S) ->
                 native(get(<<"native">>, Build, undefined),
                        D, SourceStage, S2, Files2),
             Meta0 =
-                #{<<"format">> => 1,
+                #{<<"format">> => 2,
                   <<"package">> => map_get(<<"package">>, M),
                   <<"modules">> => sort(Modules),
                   <<"dependencies">> => Edges,
@@ -203,7 +202,7 @@ source_deps([Name | T], Ds, D, S, E) ->
                         undefined ->
                             undefined;
                         P ->
-                            load_lock(path(D, P))
+                            load_lock(path(D, P), map_get(sdk,S))
                     end,
                 archive(A, L, undefined, S);
             P ->
@@ -259,10 +258,10 @@ leave(Name, Node, S) ->
                 N =/= Name
            ],
        selected := (map_get(selected, S))#{Name => Node}}.
-load_lock(P) ->
-    L = beam_pkg_toml:decode(read(P)),
+load_lock(P, SDK) ->
+    L = selected_lock(P, SDK),
     beam_pkg_manifest:fields(L,
-                             [<<"format">>, <<"root">>, <<"artifacts">>]),
+                             [<<"format">>, <<"root">>, <<"artifacts">>, <<"sdk">>]),
     case get(<<"format">>, L, undefined) of
         1 ->
             ok;
@@ -471,10 +470,10 @@ native(undefined, _, _, _, F) ->
 native(N, D, Stage, S, F) ->
     SDK = map_get(sdk, S),
     case get(<<"os">>, SDK, undefined) of
-        <<"Linux">> ->
+        OS when OS =:= <<"Linux">>; OS =:= <<"Darwin">> ->
             ok;
         _ ->
-            fail("native builds currently require Linux")
+            fail("native builds require Linux or Darwin")
     end,
     C = map_get(cmake, S),
     B = path(Stage, <<"native-build">>),
@@ -510,7 +509,12 @@ native(N, D, Stage, S, F) ->
                                      D)),
     diagnostic(beam_pkg_util:command(C, [<<"--build">>, B], D)),
     diagnostic(beam_pkg_util:command(C, [<<"--install">>, B], D)),
-    Outputs = map_get(<<"outputs">>, N),
+    Declared = map_get(<<"outputs">>, N),
+    Identities = native_identities(B, Declared),
+    Outputs = [native_path(P,Identities) || P <- Declared],
+    Bindings = #{Name => native_path(P,Identities) || Name := P <- get(<<"nifs">>,N,#{})},
+    case length(Outputs) =:= map_size(#{P => true || P <- Outputs}) of
+        true -> ok; false -> fail("duplicate native installed output paths") end,
     case sort(Outputs) =:= beam_pkg_util:files(Install) of
         true ->
             ok;
@@ -524,7 +528,8 @@ native(N, D, Stage, S, F) ->
                ],
                F),
      #{<<"outputs">> => Outputs,
-       <<"nifs">> => get(<<"nifs">>, N, #{}),
+       <<"nifs">> => Bindings,
+       <<"identities">> => Identities,
        <<"recipe">> => <<"cmake">>,
        <<"sdk">> => SDK}}.
 validate_files(M, F) ->
@@ -727,8 +732,9 @@ locked(Root, Stage, Context = {_, Prefix, Cwd, _}) ->
     CMake = beam_pkg_util:tool(<<"cmake">>, Context),
     check_cmake(CMake, Cwd),
     LockPath = path(Root, <<"beam.lock">>),
-    {Base, Records} = Lock = load_lock(LockPath),
-    L = beam_pkg_toml:decode(read(LockPath)),
+    SDK=beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>))),
+    {Base, Records} = Lock = load_lock(LockPath,SDK),
+    L = selected_lock(LockPath,SDK),
     H = map_get(<<"root">>, L),
     R = get(H, Records, #{}),
     Input = beam_pkg_manifest:string(get(<<"archive">>, R, undefined)),
@@ -738,3 +744,65 @@ locked(Root, Stage, Context = {_, Prefix, Cwd, _}) ->
     {Node, Final} = archive(path(Base, Input), Lock, H, S),
     Selected = map_get(selected, Final), check_providers(Selected),
     {Node, Selected}.
+
+selected_lock(P, SDK) ->
+    M=beam_pkg_toml:decode(read(P)),
+    case get(<<"format">>,M,undefined) of
+        1 -> M;
+        2 ->
+            Selections=checked_selections(M),
+            Selected=get(beam_pkg_manifest:target_key(SDK),Selections,undefined),
+            case is_map(Selected) andalso get(<<"sdk">>,Selected,undefined)=:=SDK of
+                true -> Selected#{<<"format">> => 1};
+                false -> fail("lock has no matching SDK/target selection; rebuild for this SDK")
+            end;
+        _ -> fail("unsupported lock format; rebuild with format 2")
+    end.
+checked_selections(M) ->
+    beam_pkg_manifest:fields(M,[<<"format">>,<<"selections">>]),
+    Selections=get(<<"selections">>,M,undefined),
+    case is_map(Selections) andalso map_size(Selections)>0 andalso map_size(Selections)=<1024 of
+        true -> ok; false -> fail("invalid target selections") end,
+    [begin
+        beam_pkg_manifest:fields(R,[<<"root">>,<<"artifacts">>,<<"sdk">>]),
+        beam_pkg_manifest:digest(get(<<"root">>,R,undefined)),
+        S=get(<<"sdk">>,R,undefined),
+        case is_map(S) andalso beam_pkg_manifest:target_key(S)=:=Key andalso is_map(get(<<"artifacts">>,R,undefined)) of
+            true -> ok; false -> fail("invalid target selection identity") end
+     end || Key := R <- Selections],
+    Selections.
+previous_selections(P) ->
+    case beam_pkg_util:info(P) of
+        {error,#{kind := not_found}} -> #{};
+        {ok,#{type := regular}} ->
+            M=beam_pkg_toml:decode(read(P)),
+            case get(<<"format">>,M,undefined) of
+                1 -> #{}; 2 -> checked_selections(M);
+                _ -> fail("unsupported previous lock format") end;
+        _ -> fail("invalid previous lock")
+    end.
+native_identities(Build, Declared) ->
+    Directory=path(Build,<<"beam-native-outputs">>),
+    case beam_pkg_util:info(Directory) of
+        {error,#{kind := not_found}} -> #{};
+        {ok,#{type := directory}} ->
+            Records=[beam_pkg_toml:decode(read(path(Directory,P))) || P <- beam_pkg_util:files(Directory)],
+            Pairs=[begin
+                beam_pkg_manifest:fields(R,[<<"name">>,<<"path">>]),
+                Name=beam_pkg_manifest:string(get(<<"name">>,R,undefined)),
+                Output=beam_pkg_manifest:string(get(<<"path">>,R,undefined)),
+                beam_pkg_util:safe(Output),
+                case member(Name,Declared) andalso Output=:=path_under_priv(Output) of
+                    true -> ok; false -> fail("undeclared native output identity") end,
+                {Name,Output}
+            end || R <- Records],
+            unique([Name || {Name,_} <- Pairs],"duplicate native output identities"),
+            from_pairs(Pairs);
+        _ -> fail("invalid native output inventory")
+    end.
+path_under_priv(<<"priv/",_/binary>>=P) -> P;
+path_under_priv(_) -> fail("native outputs must be under priv/").
+native_path(<<"priv/",_/binary>>=P,_) -> P;
+native_path(Name,Identities) ->
+    case get(Name,Identities,undefined) of
+        undefined -> fail(["missing native output identity: ",Name]); P -> P end.

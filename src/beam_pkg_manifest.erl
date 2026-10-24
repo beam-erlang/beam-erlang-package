@@ -7,7 +7,7 @@
          string/1,
          strings/1,
          digest/1,
-         module/1, nifs/2]).
+         module/1, nifs/2, format/1, target_key/1]).
 -import(beam_pkg_util, [fail/1,get/3,keys/1,member/2]).
 source(M) ->
     fields(M,
@@ -55,7 +55,10 @@ source(M) ->
                  <<"priv/",_/binary>> ->
                      beam_pkg_util:safe(P);
                  _ ->
-                     fail("native outputs must be under priv/")
+                     case get(<<"format">>,M,undefined) of
+                         2 -> native_name(P);
+                         _ -> fail("format-1 native outputs must be under priv/")
+                     end
              end ||
                  P <- strings(get(<<"outputs">>, N, undefined))
             ]
@@ -167,12 +170,21 @@ metadata(M) ->
         undefined ->
             ok;
         N ->
-            fields(N, [<<"outputs">>, <<"sdk">>, <<"recipe">>, <<"nifs">>]),
+            fields(N, [<<"outputs">>, <<"sdk">>, <<"recipe">>, <<"nifs">>, <<"identities">>]),
             [ 
              artifact_path(P, <<"priv/">>) ||
                  P <- strings(get(<<"outputs">>, N, undefined))
             ],
             sdk(get(<<"sdk">>, N, undefined)),
+            Identities=get(<<"identities">>,N,#{}),
+            fields_map(Identities),
+            [begin
+                native_name(Name), artifact_path(P,<<"priv/">>),
+                case member(P,get(<<"outputs">>,N,[])) of
+                    true -> ok; false -> fail("native identity has no declared output") end
+             end || Name := P <- Identities],
+            case map_size(Identities)=:=map_size(#{P => true || _ := P <- Identities}) of
+                true -> ok; false -> fail("duplicate native identity paths") end,
             nifs(N, get(<<"modules">>, M, [])),
             case get(<<"recipe">>, N, undefined) of
                 <<"cmake">> ->
@@ -183,12 +195,7 @@ metadata(M) ->
     end,
     M.
 common(M) ->
-    case get(<<"format">>, M, undefined) of
-        1 ->
-            ok;
-        _ ->
-            fail("unsupported package format")
-    end,
+    format(M),
     identity(M),
     Host = get(<<"host">>, M, #{}),
     fields(Host, [<<"modules">>, <<"applications">>]),
@@ -381,7 +388,12 @@ nifs(Native, Modules) ->
     fields_map(Bindings),
     Outputs = strings(get(<<"outputs">>, Native, [])),
     Paths = [begin
-        module(Name), artifact_path(P, <<"priv/">>),
+        module(Name),
+        case {Modules,P} of
+            {undefined,<<"priv/",_/binary>>} -> artifact_path(P,<<"priv/">>);
+            {undefined,_} -> native_name(P);
+            _ -> artifact_path(P,<<"priv/">>)
+        end,
         case member(P, Outputs) andalso (Modules =:= undefined orelse member(Name, Modules)) of
             true -> ok;
             false -> fail("NIF binding needs a supplied module and declared native output")
@@ -391,3 +403,20 @@ nifs(Native, Modules) ->
         true -> ok;
         false -> fail("native library has multiple module bindings")
     end.
+
+%% Version one has concrete native paths; version two can name CMake outputs.
+format(M) ->
+    case get(<<"format">>, M, undefined) of
+        V when V =:= 1; V =:= 2 -> ok;
+        _ -> fail("unsupported package format; rebuild with format 2")
+    end.
+native_name(P) ->
+    string(P),
+    case [C || <<C>> <= P, not ((C >= $a andalso C =< $z) orelse
+        (C >= $A andalso C =< $Z) orelse (C >= $0 andalso C =< $9) orelse C =:= $_ orelse C =:= $-)] of
+        [] -> ok; _ -> fail("native outputs must be logical names or paths under priv/")
+    end.
+target_key(SDK) ->
+    sdk(SDK),
+    beam_pkg_util:join([get(K,SDK,<<>>) || K <-
+        [<<"os">>,<<"architecture">>,<<"flavor">>,<<"build-id">>]],$/).

@@ -16,20 +16,19 @@ These are separate operations. Launch never builds, installs or resolves sources
 |---|---|
 | `beam help build` | Build syntax; exit 0 |
 | `beam build [directory]` | Build local source/archive graph; success 0, failure 1 |
-| `beam-pkg build [directory]` | Compatible build alias |
+| `beam-pkg build [directory]` | Build the local source/archive graph |
 | `beam-pkg help [command]` | Syntax and experimental status; exit 0 |
 | `beam-pkg version` | Distribution identity and implementation status; exit 0 |
 | `beam-pkg install [project]` | Install the locked archive selection; success 0, failure 1 |
 | `beam-pkg tree [project]` | Not implemented; stderr, exit 2 |
-| `beam run --project <directory> [-- args...]` | Execute an installed root's `main/1` |
-| `beam shell --project <directory>` | Open the installed selection interactively, including library roots |
+| `beam-pkg run --project <directory> [-- args...]` (also `beam run`) | Execute an installed root's `main/1` |
+| `beam-pkg shell --project <directory>` (also `beam shell`) | Open the installed selection interactively, including library roots |
 | `beam task [--project <directory>] [name [-- arguments...]]` | List or execute root-manifest development tasks |
 | `beam help task` | Task syntax; exit 0 |
 
 Packaging directories default to `.`; prefix names beginning with `-` with `./`.
-Malformed arguments return 1. Build and project execution select BEAM by default;
-explicit `--runtime=beam` is accepted and `--runtime=otp` rejected. Existing source
-execution retains its OTP default. Project execution preserves normal return,
+Malformed arguments return 1. Both obsolete runtime selectors are rejected.
+Arguments after `--` remain literal program arguments. Project execution preserves normal return,
 requested halt status and exception diagnostics. Arguments are Unicode charlists.
 
 Help/version and tree do not read project inputs or require compiler/file/program/
@@ -46,7 +45,7 @@ previous lock and artifacts; unused archives can remain. Explicit builds recompi
 source inputs. Build does not create `.beam/` or start applications.
 
 Install materializes the compiled root and selected dependencies in a new immutable
-generation beneath `.beam/environments/`, then atomically replaces `.beam/current.toml`.
+generation beneath `.beam/environments/`, then atomically replaces `.beam/current-<SDK-build-id>.toml`.
 Failed installation preserves the previous selection and lock and removes staging.
 Previous successful generations remain. Concurrent installation is unsupported.
 
