@@ -1,10 +1,11 @@
 %% SPDX-License-Identifier: Apache-2.0
 %% Installed selections have no source or build-tool acquisition policy.
 -module(beam_pkg_environment).
--export([install/2, prepare/1]).
+-export([install/2, install/3, prepare/1, export_selection/3]).
 -import(beam_pkg_util, [path/2, read/1, write/2, mkdir/1, get/3, fail/1, keys/1, sort/1, member/2]).
 
-install(Directory, Context = {_, _, Cwd, _}) ->
+install(Directory,Context) -> install(Directory,Context,beam_pkg_target:select(Context,undefined)).
+install(Directory, Context = {_, _, Cwd, _},Target) ->
     Root = path(Cwd, Directory),
     Base = path(Root, <<".beam">>),
     Generations = path(Base, <<"environments">>),
@@ -12,19 +13,24 @@ install(Directory, Context = {_, _, Cwd, _}) ->
     Id = integer_to_binary(erlang:system_time(nanosecond)),
     Stage = path(Generations, <<"stage-", Id/binary>>),
     Final = path(Generations, Id),
-    SDK=beam_pkg_toml:decode(read(path(element(2,Context), <<"lib/beam/sdk.toml">>))),
+    SDK=map_get(sdk,Target),
     Current=pointer(Base,SDK),
     Pointer = <<Current/binary,"-",Id/binary,".tmp">>,
     mkdir(Stage),
     try
-        {RootNode, Nodes} = beam_pkg_build:locked(Root, Stage, Context),
-        Packages = #{map_get(hash, N) => begin
+        {RootNode, Nodes} = beam_pkg_build:locked(Root, Stage, Context, Target),
+        Installed = [begin
             H = map_get(hash, N),
             Relative = <<"packages/", H/binary>>,
             Files = beam_pkg_archive:unpack(read(map_get(archive, N))),
-            beam_pkg_archive:extract(Files, path(Stage, Relative)),
-            Relative
-        end || _ := N <- Nodes},
+            Location=path(Stage,Relative),
+            beam_pkg_archive:extract(Files, Location),
+            Digests=#{P=>beam_pkg_util:hash(path(Location,P),map_get(cmake,Target)) || P:=_<-Files},
+            {H,Relative,Digests}
+        end || _:=N<-Nodes],
+        Packages=#{H=>Relative || {H,Relative,_}<-Installed},
+        write(path(Stage,<<"integrity.toml">>),beam_pkg_toml:encode(#{<<"format">>=>1,
+            <<"packages">>=>#{H=>Digests || {H,_,Digests}<-Installed}})),
         Environment = #{<<"format">> => 2, <<"root">> => map_get(hash, RootNode),
                         <<"packages">> => Packages, <<"sdk">> => SDK},
         write(path(Stage, <<"environment.toml">>), beam_pkg_toml:encode(Environment)),
@@ -93,7 +99,11 @@ selection({_, Prefix, Cwd, _}, Directory, HostModules, Purpose) ->
     Native = append([map_get(nifs, N) || H <- sort(keys(Nodes)), N <- [map_get(H, Nodes)]]),
     case length(Modules) =< 4096 andalso length(Native) =< 1024 andalso
          sum([byte_size(B) || {_, B, _} <- Modules]) =< 268435456 of
-        true -> {case Purpose of shell -> <<"shell">>; run -> Entry end, Modules, Native}; false -> fail("project launch inventory exceeds limits")
+        true -> case Purpose of
+            export -> {Root,Nodes,Generation};
+            _ -> {case Purpose of shell -> <<"shell">>; run -> Entry end, Modules, Native}
+        end;
+        false -> fail("project launch inventory exceeds limits")
     end.
 
 installed(H, Relative, Generation, SDK, HostModules) ->
@@ -116,7 +126,7 @@ installed(H, Relative, Generation, SDK, HostModules) ->
     case map_size(Native) =:= 0 orelse get(<<"sdk">>, Native, undefined) =:= SDK of
         true -> ok; false -> fail("native installed SDK/target mismatch")
     end,
-    #{meta => M,
+    #{meta => M,files=>Files,native_meta=>Native,
       modules => [{Name, map_get(<<"ebin/", Name/binary, ".beam">>, Files), path(P, <<"ebin/", Name/binary, ".beam">>)}
                   || Name <- map_get(<<"modules">>, M)],
       nifs => [{Name, path(P, NativePath)} || Name := NativePath <- get(<<"nifs">>, Native, #{})]}.
@@ -186,3 +196,21 @@ installed_entries([Name | Rest], Root, Relative, Depth, Acc) ->
 pointer(Base,SDK) ->
     Build=beam_pkg_manifest:digest(get(<<"build-id">>,SDK,undefined)),
     path(Base,<<"current-",Build/binary,".toml">>).
+
+export_selection({Identity,_,Cwd,Search},Directory,S) ->
+    Prefix=map_get(target_prefix,S),
+    Core=[atom_to_binary(M,utf8) || M<-erlang:pre_loaded()],
+    Host=Core++append([[M || M<-beam_pkg_util:split(read(path(Prefix,<<"lib/beam/",P/binary,"/modules.txt">>)),10),M=/=<<>>]
+        || P<-[<<"library">>,<<"boot">>,<<"services">>]]),
+    {Root,Nodes,Generation}=selection({Identity,Prefix,Cwd,Search},Directory,Host,export),
+    Integrity=record(path(Generation,<<"integrity.toml">>),[<<"format">>,<<"packages">>]),
+    Packages=get(<<"packages">>,Integrity,#{}),
+    case sort(keys(Packages))=:=sort(keys(Nodes)) of
+        true -> ok; false -> fail("installed integrity selection mismatch; reinstall packages") end,
+    {Root,#{H=>begin
+        Digests=map_get(H,Packages),
+        case is_map(Digests) andalso sort(keys(Digests))=:=sort(keys(map_get(files,N))) of
+            true -> ok; false -> fail("installed integrity inventory mismatch") end,
+        [beam_pkg_manifest:digest(D) || _:=D<-Digests],
+        N#{expected_files=>Digests}
+    end || H:=N<-Nodes}}.

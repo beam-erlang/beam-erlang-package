@@ -1,10 +1,8 @@
-# BEAM package format 2
+# BEAM package formats
 
 ## Status and supported inputs
 
-This format is experimental and revisable. New archives, locks and installed
-selection records use format 2. Valid format-1 source manifests and concrete-path
-archives remain readable without rewriting their bytes. Format-1 locks describe
+This format is experimental and revisable. New archives use metadata format 3; source manifests accept formats 1/2 and locks/installed environments remain format 2. Valid format-1/2 archives remain readable without rewriting their bytes. Format-1 locks describe
 one selection; matching native SDK checks still apply. Ambiguous or unsupported
 older records require an explicit rebuild/install. `beam build` (also `beam-pkg build`)
 builds ordinary libraries, local execution-dependency graphs and CMake native
@@ -137,8 +135,9 @@ GLM vendors upstream headers and uses the installed `beam_target_nif(target)`
 CMake helper. The helper links the interface-only `BEAM::NIF` target and embeds a
 matching-build SDK descriptor without an absolute runtime-link path.
 
-Native builds support matching host Linux and Darwin interpreter and JIT prefixes.
-Cross-compilation is rejected. Native metadata records output paths, the `cmake`
+Native builds support matching host Linux and Darwin interpreter and JIT prefixes,
+and explicit iOS device/simulator targets using the target SDK’s installed
+consumer toolchain. The executing SDK supplies the attested Erlang compiler. Native metadata records output paths, the `cmake`
 recipe kind and matching SDK provenance (distribution identity, source/config
 build ID, OS, architecture, triple and flavor). Native archive dependencies must
 match the selected SDK. This conservative rule is not a stable ABI promise.
@@ -147,8 +146,9 @@ System C/C++ runtime dependencies are not bundled into these archives.
 The optional `nifs` table maps supplied package modules to declared native outputs,
 with one module per library. It is retained in portable metadata and validated
 again when consuming archives. Outputs without bindings are never implicitly
-activated. Build does not execute native code. Runtime preparation maps explicitly
-selected libraries and compares their embedded SDK descriptor; activation validates
+activated. Build does not execute native code. Dynamic runtime preparation maps explicitly
+selected libraries and compares their embedded SDK descriptor. Static package
+NIFs instead supply generated resident linked-NIF selections; activation validates
 actual module identity, ABI and function tables before publishing NIFs. Load
 information is initially `undefined`. Native libraries and recipes are trusted
 code; mapping may execute platform constructors. Arbitrary `on_load`, implicit
@@ -259,3 +259,56 @@ metadata, locks or environments. `beam task` reads only the root source manifest
 it does not require supported build recipes or existing source inputs. See
 [command policy and limits](commands.md#development-tasks). Installed shell uses
 the selected closure without requiring root entry metadata; it does not read scripts.
+
+## Archive metadata format 3
+
+The compiler record describes the actual executing host SDK, independently of
+the destination. `compiler-generation` is the SHA-256 identity of the attested
+compiler seed manifest. Build/install compare it with the selected target's
+verified generation. Native metadata keeps its exact destination `sdk`. Old
+archives lacking cross-target compiler evidence require rebuilding; immutable
+older archives and other lock selections are preserved.
+
+`native.artifacts` maps logical output names to structured records:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `static` or `shared`, supported by the target SDK. |
+| `path` | Primary installed artifact, relative under `priv/`. |
+| `files` | Complete installed file inventory, including generated registration headers. |
+| `sdk-build-id` | Exact target SDK identity. |
+| `language` | `C` or `CXX`. |
+| `dependencies` | Supported `output:<logical-name>`, `sdk:runtime`, `system:m`, or `system:c++` dependencies; arbitrary flags and absolute host paths are rejected. |
+| `module`, `binding`, `header` | Optional complete static linked-NIF registration selection, C accessor symbol and installed header. |
+
+The existing `outputs`, `identities` and module-to-path `nifs` mappings remain
+available and must agree with these records. Dependency closures must be complete
+and acyclic. `beam_package_native_output` produces this data from declared CMake
+targets. Package NIF activation remains explicit; registering a static artifact
+does not change OTP built-in NIF loading semantics.
+
+Installation writes `integrity.toml` beside the format-2 environment, with a
+digest inventory of the installed files. Export verifies captured bytes against
+that inventory. Existing environments without it remain usable through their
+existing local workflow but must be reinstalled before export.
+
+## Application export format 1
+
+An export contains complete generations beneath `.generations/`; `current` is a
+relative symlink switched by one atomic rename only after validation and staging.
+Stable `BEAMPackageExport.cmake` and `.xcconfig` entry files select it. A failed
+export preserves the previous selection. Copy the complete directory when
+relocating it. CMake resolves the generation at configuration time; consumers
+must reconfigure to adopt a newer selection.
+
+Each generation contains `export.toml` (format 1), package files by archive digest,
+`registration.c/.h`, `package_inventory.h`, `package.cmake`, and
+`package.xcconfig`. The inventory records exact SDK identity, compiler generation,
+the selected root, package metadata and file digests. Generated registration
+accessors select only declared linked NIFs. CMake verifies package file hashes
+and target SDK identity, exposes `BEAMPackageInputs` and `BEAM_PACKAGE_ASSETS`,
+and imports native link inputs. Xcode configuration paths use the consumer's
+`BEAM_PACKAGE_EXPORT` setting. No producer source/build paths are retained.
+
+SDK framework deployment belongs to SDK tooling. The exporter neither assembles
+nor signs an application, executes target code, nor acquires source dependencies.

@@ -7,6 +7,7 @@ command(Context={beam_context,1,_,_,_,_,Root,_,_,_,Bytes}, Arguments) ->
     Services=case Arguments of
         ["build"|_] -> [output,file,program,zlib];
         ["install"|_] -> [output,file,program,zlib];
+        ["export"|_] -> [output,file,program,zlib];
         ["task"|_] -> [output,file];
         [Operation,"--project",Directory|Rest] when Operation =:= "run"; Operation =:= "shell" ->
             case {Directory,Operation,Rest} of
@@ -38,18 +39,21 @@ operate({beam_context,1,_,Prefix,Identity,Build,_,Cwd,Search,<<"posix">>,_}, Arg
 
 utf8(A) when is_list(A) -> << <<C/utf8>> || C <- A >>.
 
-dispatch([<<"install">>|Rest], Context, _) ->
-    case directory(Rest) of
-        {ok,Dir} -> {ok,Environment}=beam_pkg_environment:install(Dir,Context),
-                    report({standard_output,0,["Installed ",Environment,"\n"]});
-        error -> report(invalid())
+dispatch([Operation|Rest], Context, _) when Operation=:=<<"build">>; Operation=:=<<"install">> ->
+    A=beam_pkg_target:arguments(Rest,false),
+    Selection=beam_pkg_target:select(Context,map_get(target,A)),
+    Dir=map_get(directory,A),
+    case Operation of
+        <<"build">> -> {ok,Archive}=beam_pkg_build:run(Dir,Context,Selection),
+            report({standard_output,0,["Built ",Archive,"\nUpdated beam.lock\n"]});
+        <<"install">> -> {ok,Environment}=beam_pkg_environment:install(Dir,Context,Selection),
+            report({standard_output,0,["Installed ",Environment,"\n"]})
     end;
-dispatch([<<"build">>|Rest], Context, _) ->
-    case directory(Rest) of
-        {ok,Dir} -> {ok,Archive}=beam_pkg_build:run(Dir,Context),
-                    report({standard_output,0,["Built ",Archive,"\nUpdated beam.lock\n"]});
-        error -> report(invalid())
-    end;
+dispatch([<<"export">>|Rest],Context,_) ->
+    A=beam_pkg_target:arguments(Rest,true),
+    S=beam_pkg_target:select(Context,map_get(target,A)),
+    {ok,Output}=beam_pkg_export:run(map_get(directory,A),map_get(output,A),Context,S),
+    report({standard_output,0,["Exported ",Output,"\n"]});
 dispatch([<<"task">>|Rest],Context,_) ->
     case beam_pkg_task:prepare({Context,Rest}) of
         {list,Text} -> report({standard_output,0,Text});
@@ -137,8 +141,9 @@ help(_) -> invalid().
 
 syntax(<<"help">>) -> <<"beam-pkg help [command]">>;
 syntax(<<"version">>) -> <<"beam-pkg version">>;
-syntax(<<"build">>) -> <<(get(command_name))/binary, " build [directory]">>;
-syntax(<<"install">>) -> <<"beam-pkg install [project]">>;
+syntax(<<"build">>) -> <<(get(command_name))/binary, " build [--target-sdk SDK] [directory]">>;
+syntax(<<"install">>) -> <<"beam-pkg install [--target-sdk SDK] [project]">>;
+syntax(<<"export">>) -> <<"beam-pkg export [--target-sdk SDK] --output directory [project]">>;
 syntax(<<"run">>) -> <<"beam-pkg run --project <directory> [-- args...]">>;
 syntax(<<"shell">>) -> <<"beam-pkg shell --project <directory>">>;
 syntax(<<"task">>) -> <<"beam-pkg task [--project <directory>] [name [-- args...]]">>;
@@ -148,15 +153,16 @@ syntax(_) -> error.
 invalid() -> {standard_error, 1, [get(command_name), <<": invalid arguments\n">>, usage()]}.
 usage() ->
     case get(command_name) of
-        <<"beam">> -> <<"usage: beam build [directory]\n">>;
+        <<"beam">> -> <<"usage: beam build [--target-sdk SDK] [directory]\n">>;
         _ -> package_usage()
     end.
 package_usage() ->
     [<<"usage: beam-pkg <command> [args]\n"
        "  help [command]       Show syntax and status\n"
        "  version              Show distribution identity and status\n"
-       "  build [directory]    Build local Erlang/native packages\n"
+       "  build [--target-sdk SDK] [directory]    Build local Erlang/native packages\n"
        "  install [project]    Install the locked project\n"
+       "  export --output dir  Export installed application inputs\n"
        "  tree [project]       Show dependencies (not implemented)\n"
        "Directories default to .; use ./ for names beginning with -.\n">>, status()].
 status() -> <<"Experimental local packages and BEAM project execution.\n">>.

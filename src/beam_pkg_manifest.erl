@@ -122,8 +122,11 @@ metadata(M) ->
             <<"application">>,
             <<"entry">>,
             <<"native">>,
-            <<"compiler">>]),
-    common(M),
+            <<"compiler">>, <<"compiler-generation">>]),
+    case get(<<"format">>,M,undefined) of
+        3 -> common(M#{<<"format">>:=2}), digest(get(<<"compiler-generation">>,M,undefined));
+        _ -> common(M)
+    end,
     [ 
      module(N) ||
          N <- strings(get(<<"modules">>, M, undefined))
@@ -170,7 +173,7 @@ metadata(M) ->
         undefined ->
             ok;
         N ->
-            fields(N, [<<"outputs">>, <<"sdk">>, <<"recipe">>, <<"nifs">>, <<"identities">>]),
+            fields(N, [<<"outputs">>, <<"sdk">>, <<"recipe">>, <<"nifs">>, <<"identities">>, <<"artifacts">>]),
             [ 
              artifact_path(P, <<"priv/">>) ||
                  P <- strings(get(<<"outputs">>, N, undefined))
@@ -186,6 +189,7 @@ metadata(M) ->
             case map_size(Identities)=:=map_size(#{P => true || _ := P <- Identities}) of
                 true -> ok; false -> fail("duplicate native identity paths") end,
             nifs(N, get(<<"modules">>, M, [])),
+            case get(<<"format">>,M,undefined) of 3 -> native_artifacts(N); _ -> ok end,
             case get(<<"recipe">>, N, undefined) of
                 <<"cmake">> ->
                     ok;
@@ -420,3 +424,57 @@ target_key(SDK) ->
     sdk(SDK),
     beam_pkg_util:join([get(K,SDK,<<>>) || K <-
         [<<"os">>,<<"architecture">>,<<"flavor">>,<<"build-id">>]],$/).
+
+%% Native link inputs are data, never arbitrary linker flags or CMake code.
+native_artifacts(N) ->
+    A=get(<<"artifacts">>,N,undefined), fields_map(A),
+    SDK=get(<<"build-id">>,map_get(<<"sdk">>,N),undefined),
+    Files=append_native([begin
+        fields(R,[<<"path">>,<<"kind">>,<<"files">>,<<"dependencies">>,<<"sdk-build-id">>,
+                  <<"module">>,<<"header">>,<<"binding">>,<<"language">>]),
+        P=get(<<"path">>,R,undefined), artifact_path(P,<<"priv/">>),
+        case Name of <<"priv/",_/binary>> -> beam_pkg_util:safe(Name); _ -> native_name(Name) end,
+        Ps=strings(get(<<"files">>,R,undefined)),
+        [artifact_path(F,<<"priv/">>) || F<-Ps],
+        case member(P,Ps) andalso get(<<"sdk-build-id">>,R,undefined)=:=SDK of
+            true -> ok; false -> fail("native artifact SDK/target mismatch or missing primary inventory") end,
+        case get(<<"kind">>,R,undefined) of <<"static">> -> ok; <<"shared">> -> ok; _ -> fail("unsupported native kind") end,
+        case get(<<"language">>,R,undefined) of <<"C">> -> ok; <<"CXX">> -> ok; _ -> fail("unsupported native language") end,
+        [case D of
+            <<"sdk:runtime">> -> ok;
+            <<"system:m">> -> ok;
+            <<"system:c++">> -> ok;
+            <<"output:",Other/binary>> -> case is_map_key(Other,A) andalso Other=/=Name of
+                true -> ok; false -> fail("unresolved native dependency") end;
+            _ -> fail("unsupported native dependency")
+         end || D<-strings(get(<<"dependencies">>,R,undefined))],
+        case get(<<"binding">>,R,undefined) of
+            undefined -> case is_map_key(<<"header">>,R) orelse is_map_key(<<"module">>,R) of
+                true -> fail("incomplete linked-NIF record"); false -> ok end;
+            Symbol ->
+                c_symbol(Symbol), module(get(<<"module">>,R,undefined)),
+                case get(<<"kind">>,R,undefined)=:=<<"static">> andalso member(get(<<"header">>,R,undefined),Ps) of
+                    true -> ok; false -> fail("invalid linked-NIF inventory") end
+        end,
+        Ps
+    end || Name:=R<-A]),
+    case beam_pkg_util:sort(Files)=:=beam_pkg_util:sort(map_get(<<"outputs">>,N)) andalso
+         length(Files)=:=map_size(#{P=>true || P<-Files}) of
+        true -> ok; false -> fail("native artifact inventory differs from outputs") end,
+    [begin
+        Matches=[R || _:=R<-A,map_get(<<"path">>,R)=:=P],
+        case Matches of
+            [#{<<"kind">>:=<<"shared">>}] -> ok;
+            [#{<<"kind">>:=<<"static">>,<<"module">>:=Mod,<<"binding">>:=_}] -> ok;
+            _ -> fail("NIF binding does not match its native artifact") end
+     end || Mod:=P<-get(<<"nifs">>,N,#{})],
+    [native_closure(Name,A,[]) || Name:=_<-A],ok.
+native_closure(Name,A,Stack) ->
+    case member(Name,Stack) orelse length(Stack)>128 of true -> fail("native dependency cycle or depth limit"); false -> ok end,
+    [native_closure(Other,A,[Name|Stack]) || <<"output:",Other/binary>> <- map_get(<<"dependencies">>,map_get(Name,A))].
+append_native([]) -> [];
+append_native([H|T]) -> H++append_native(T).
+c_symbol(<<C,Rest/binary>>) when C=:=$_; C>=$a,C=<$z; C>=$A,C=<$Z ->
+    case [X || <<X>><=Rest,not(X=:=$_ orelse X>=$a andalso X=<$z orelse X>=$A andalso X=<$Z orelse X>=$0 andalso X=<$9)] of
+        [] -> ok; _ -> fail("invalid C registration symbol") end;
+c_symbol(_) -> fail("invalid C registration symbol").

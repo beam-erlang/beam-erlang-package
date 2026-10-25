@@ -76,7 +76,7 @@ requirement checks. Native bindings activate before the prompt. Files, sockets,
 zlib, external programs, implicit code acquisition and OTP startup remain absent.
 Bindings, local functions, history, editing, error recovery, `q()`, EOF and explicit
 halt use the real shell. Exit reclaims its native resources. Plain `beam shell`
-retains its OTP default; explicit OTP project shell is rejected before VM creation.
+uses the modern BEAM profile; obsolete OTP selectors are rejected before VM creation.
 Missing installation is an error, not a request to build or install.
 
 ## Development tasks
@@ -110,3 +110,25 @@ Preparation/exec errors return 1; a launched command owns its output and status.
 Explicit OTP task preparation is rejected; task arguments may select OTP for a
 child command. Built-ins cannot be shadowed. No hooks, dependency scripts,
 chaining, automatic build/install or project discovery are provided.
+
+## Explicit target build, install and export
+
+```sh
+"$HOST_SDK/bin/beam-pkg" build --target-sdk "$TARGET_SDK" .
+"$HOST_SDK/bin/beam-pkg" install --target-sdk "$TARGET_SDK" .
+"$HOST_SDK/bin/beam-pkg" export --target-sdk "$TARGET_SDK" --output build/export .
+```
+
+The target defaults to the executing SDK. The executing SDK supplies the verified
+compiler; the target supplies native headers, libraries, capabilities, identity
+and installed consumer toolchain. iOS builds require explicit `DEVELOPER_DIR`.
+Target binaries never execute. Compatible compiler generations permit portable
+bytecode; native archives require exact target identity. `run`, `shell` and
+`task` continue to operate on the local host selection.
+
+Export reads one installed selection and its target SDK. It does not rebuild,
+read source manifests, resolve dependencies or run package code. Missing or
+invalid installed inputs fail before replacing the prior output. Formats and
+the relocatable output tree are owned by [package formats](package-format.md).
+Keep the full export directory for builds; copy only declared runtime assets
+into an application. Xcode handles framework embedding and signing.

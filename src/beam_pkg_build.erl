@@ -1,6 +1,6 @@
 %% SPDX-License-Identifier: Apache-2.0
 -module(beam_pkg_build).
--export([run/2, locked/3, validate_files/2, check_providers/1, verify_record/3]).
+-export([run/2, run/3, locked/3, locked/4, validate_files/2, check_providers/1, verify_record/3]).
 -import(beam_pkg_util,
         [fail/1,
          get/3,
@@ -15,13 +15,13 @@
          member/2,
          text/1]).
 %% Publish immutable archives first; replace the root selection only on success.
-run(Directory, Context = {_, Prefix, Cwd, _}) ->
+run(Directory, Context) -> run(Directory,Context,beam_pkg_target:select(Context,undefined)).
+run(Directory, _Context = {_, _, Cwd, _}, Target) ->
     Root = path(Cwd, Directory),
     _ = manifest(Root),
-    CMake = beam_pkg_util:tool(<<"cmake">>, Context),
+    CMake = map_get(cmake, Target),
     check_cmake(CMake, Cwd),
-    SDK =
-        beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>))),
+    SDK = map_get(sdk,Target),
     Work = path(Root, <<"build/beam-pkg">>),
     mkdir(Work),
     Unique = integer_to_binary(erlang:system_time(nanosecond)),
@@ -30,14 +30,13 @@ run(Directory, Context = {_, Prefix, Cwd, _}) ->
     Store = path(Work, <<"artifacts">>),
     mkdir(Store),
     State =
-        #{selected => #{},
+        Target#{selected => #{},
           visiting => [],
           stage => Stage,
           store => Store,
           root => Root,
           cmake => CMake,
-          sdk => SDK,
-          prefix => Prefix},
+          sdk => SDK},
     try
         {Node, Final} = source(Root, State),
         Selected = map_get(selected, Final),
@@ -155,13 +154,14 @@ source(D, S) ->
                 native(get(<<"native">>, Build, undefined),
                        D, SourceStage, S2, Files2),
             Meta0 =
-                #{<<"format">> => 2,
+                #{<<"format">> => 3,
                   <<"package">> => map_get(<<"package">>, M),
                   <<"modules">> => sort(Modules),
                   <<"dependencies">> => Edges,
                   <<"host">> => get(<<"host">>, M, #{}),
                   <<"exports">> => Exports,
-                  <<"compiler">> => map_get(sdk, S)},
+                  <<"compiler">> => map_get(host_sdk, S),
+                  <<"compiler-generation">> => map_get(generation,S)},
             Meta1 = optional(<<"application">>, Application, Meta0),
             Meta2 =
                 optional(<<"entry">>, get(<<"entry">>, M, #{}), Meta1),
@@ -170,6 +170,7 @@ source(D, S) ->
             Files =
                 Files3#{<<"package.toml">> => beam_pkg_toml:encode(Meta)},
             beam_pkg_manifest:metadata(Meta),
+            beam_pkg_target:compatible(Meta,S),
             validate_files(Meta, Files),
             Archive = beam_pkg_archive:pack(Files),
             Tmp = path(SourceStage, <<"package.bpkg.tar.gz">>),
@@ -297,6 +298,7 @@ archive(P, Lock, Expected, S) ->
                                                               "toml">>,
                                                             Files, <<>>))),
     validate_files(Meta, Files),
+    beam_pkg_target:compatible(Meta,S),
     {Name, Version} = beam_pkg_manifest:identity(Meta),
     case existing(Name, Version, {archive, H}, S) of
         {found, N} ->
@@ -469,26 +471,26 @@ native(undefined, _, _, _, F) ->
     {F, #{}};
 native(N, D, Stage, S, F) ->
     SDK = map_get(sdk, S),
-    case get(<<"os">>, SDK, undefined) of
-        OS when OS =:= <<"Linux">>; OS =:= <<"Darwin">> ->
-            ok;
-        _ ->
-            fail("native builds require Linux or Darwin")
-    end,
+    T=map_get(target,S),
     C = map_get(cmake, S),
     B = path(Stage, <<"native-build">>),
     Install = path(Stage, <<"native-install">>),
     Guard = path(Stage, <<"native-target.cmake">>),
-    write(Guard,
-          iolist_to_binary(["if(CMAKE_CROSSCOMPILING OR NOT CMAKE_SYSTE"
-                            "M_NAME STREQUAL \"",
-                            map_get(<<"os">>, SDK),
-                            "\" OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "
-                            "\"",
-                            map_get(<<"architecture">>, SDK),
-                            "\")\nmessage(FATAL_ERROR \"Native package "
-                            "target must match installed SDK\")\nendif("
-                            ")\n"])),
+    write(Guard,iolist_to_binary([
+        "if(NOT CMAKE_SYSTEM_NAME STREQUAL ",quote(map_get(<<"system">>,T)),
+        " OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL ",quote(map_get(<<"processor">>,T)),
+        ")\nmessage(FATAL_ERROR \"Native package target must match installed SDK\")\nendif()\n",
+        "find_package(BEAM REQUIRED CONFIG PATHS ",quote(path(map_get(target_prefix,S),<<"lib/cmake/BEAM">>))," NO_DEFAULT_PATH)\n",
+        "if(NOT BEAM_SDK_BUILD_ID STREQUAL ",quote(map_get(<<"build-id">>,SDK)),
+        ")\nmessage(FATAL_ERROR \"Native package selected the wrong SDK\")\nendif()\n"])),
+    Toolchain=case map_get(<<"system">>,T) of
+        <<"iOS">> -> [<<"-DCMAKE_TOOLCHAIN_FILE=",(path(map_get(target_prefix,S),<<"lib/cmake/BEAM/BEAMToolchain.cmake">>))/binary>>];
+        _ ->
+            H=map_get(host_target,S),
+            case {map_get(<<"system">>,T),map_get(<<"architecture">>,T)} =:=
+                 {map_get(<<"system">>,H),map_get(<<"architecture">>,H)} of
+                true -> []; false -> fail("target SDK has no supported consumer toolchain") end
+    end,
     diagnostic(beam_pkg_util:command(C,
                                      [<<"-S">>,
                                       path(D, map_get(<<"cmake">>, N)),
@@ -503,15 +505,17 @@ native(N, D, Stage, S, F) ->
                                       <<"-DCMAKE_PROJECT_INCLUDE=",
                                         Guard/binary>>,
                                       <<"-DCMAKE_PREFIX_PATH=",
-                                        (map_get(prefix, S))/binary>>,
+                                        (map_get(target_prefix, S))/binary>>,
                                       <<"-DCMAKE_INSTALL_PREFIX=",
-                                        Install/binary>>],
+                                        Install/binary>>] ++ Toolchain,
                                      D)),
     diagnostic(beam_pkg_util:command(C, [<<"--build">>, B], D)),
     diagnostic(beam_pkg_util:command(C, [<<"--install">>, B], D)),
     Declared = map_get(<<"outputs">>, N),
-    Identities = native_identities(B, Declared),
-    Outputs = [native_path(P,Identities) || P <- Declared],
+    Records = native_identities(B, Declared),
+    Identities = #{Name => map_get(<<"path">>,R) || Name := R <- Records},
+    Artifacts = #{P => native_record(native_path(P,Identities),get(P,Records,undefined),S) || P <- Declared},
+    Outputs = append([map_get(<<"files">>,R) || _ := R <- Artifacts]),
     Bindings = #{Name => native_path(P,Identities) || Name := P <- get(<<"nifs">>,N,#{})},
     case length(Outputs) =:= map_size(#{P => true || P <- Outputs}) of
         true -> ok; false -> fail("duplicate native installed output paths") end,
@@ -530,6 +534,7 @@ native(N, D, Stage, S, F) ->
      #{<<"outputs">> => Outputs,
        <<"nifs">> => Bindings,
        <<"identities">> => Identities,
+       <<"artifacts">> => Artifacts,
        <<"recipe">> => <<"cmake">>,
        <<"sdk">> => SDK}}.
 validate_files(M, F) ->
@@ -728,19 +733,20 @@ cleanup(Stage) ->
     end.
 
 %% Shared locked-archive graph acquisition for installation. No source recipes.
-locked(Root, Stage, Context = {_, Prefix, Cwd, _}) ->
-    CMake = beam_pkg_util:tool(<<"cmake">>, Context),
+locked(Root,Stage,Context) -> locked(Root,Stage,Context,beam_pkg_target:select(Context,undefined)).
+locked(Root, Stage, _Context = {_, _, Cwd, _}, Target) ->
+    CMake = map_get(cmake,Target),
     check_cmake(CMake, Cwd),
     LockPath = path(Root, <<"beam.lock">>),
-    SDK=beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>))),
+    SDK=map_get(sdk,Target),
     {Base, Records} = Lock = load_lock(LockPath,SDK),
     L = selected_lock(LockPath,SDK),
     H = map_get(<<"root">>, L),
     R = get(H, Records, #{}),
     Input = beam_pkg_manifest:string(get(<<"archive">>, R, undefined)),
     Store = path(Stage, <<"archives">>), mkdir(Store),
-    S = #{selected => #{}, visiting => [], stage => Stage, store => Store,
-          cmake => CMake, sdk => beam_pkg_toml:decode(read(path(Prefix, <<"lib/beam/sdk.toml">>)))},
+    S = Target#{selected => #{}, visiting => [], stage => Stage, store => Store,
+          cmake => CMake, sdk => SDK},
     {Node, Final} = archive(path(Base, Input), Lock, H, S),
     Selected = map_get(selected, Final), check_providers(Selected),
     {Node, Selected}.
@@ -788,13 +794,13 @@ native_identities(Build, Declared) ->
         {ok,#{type := directory}} ->
             Records=[beam_pkg_toml:decode(read(path(Directory,P))) || P <- beam_pkg_util:files(Directory)],
             Pairs=[begin
-                beam_pkg_manifest:fields(R,[<<"name">>,<<"path">>]),
+                beam_pkg_manifest:fields(R,[<<"name">>,<<"path">>,<<"kind">>,<<"files">>,<<"dependencies">>,<<"sdk-build-id">>,<<"module">>,<<"header">>,<<"binding">>,<<"language">>]),
                 Name=beam_pkg_manifest:string(get(<<"name">>,R,undefined)),
                 Output=beam_pkg_manifest:string(get(<<"path">>,R,undefined)),
                 beam_pkg_util:safe(Output),
                 case member(Name,Declared) andalso Output=:=path_under_priv(Output) of
                     true -> ok; false -> fail("undeclared native output identity") end,
-                {Name,Output}
+                {Name,#{K=>V || K:=V <- R,K=/=<<"name">>}}
             end || R <- Records],
             unique([Name || {Name,_} <- Pairs],"duplicate native output identities"),
             from_pairs(Pairs);
@@ -806,3 +812,12 @@ native_path(<<"priv/",_/binary>>=P,_) -> P;
 native_path(Name,Identities) ->
     case get(Name,Identities,undefined) of
         undefined -> fail(["missing native output identity: ",Name]); P -> P end.
+
+%% CMake quoted arguments: escape syntax, including variable expansion.
+quote(B) -> iolist_to_binary([$",[case C of $\\ -> "\\\\"; $" -> "\\\""; $$ -> "\\$"; $; -> "\\;"; _ -> C end || <<C>> <= B],$"]).
+
+native_record(P,undefined,S) ->
+    case map_get(cross,S) of true -> fail("cross-target native recipes require structured output records"); false -> ok end,
+    #{<<"path">>=>P,<<"kind">>=><<"shared">>,<<"files">>=>[P],<<"dependencies">>=>[],
+      <<"sdk-build-id">>=>map_get(<<"build-id">>,map_get(sdk,S)),<<"language">>=><<"C">>};
+native_record(_,R,_) -> R.

@@ -121,8 +121,36 @@ def main():
         build(leaf)
         assert artifact(leaf) != h1
 
+        # Resource-only exports have valid portable C and no implicit NIFs.
+        resource_only = work / 'resource-only'
+        resource_only.mkdir()
+        (resource_only / 'beam.toml').write_text('format=2\n[package]\nname="test/resources"\nversion="1"\n[exports]\nresources=["message.txt"]\n')
+        (resource_only / 'message.txt').write_text('packaged resource\n')
+        build(resource_only)
+        run([exe, 'install', resource_only], work, 0, env)
+        exported = work / 'resource export'
+        run([exe, 'export', '--output', exported, resource_only], work, 0, env)
+        consumer_c = work / 'resource consumer'
+        consumer_c.mkdir()
+        (consumer_c / 'main.c').write_text('#include "registration.h"\n#include "package_inventory.h"\nint main(void) { return beam_package_inventory.count != 0 || beam_package_linked_nifs(0,0) != 0; }\n')
+        (consumer_c / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.25)
+project(resource_export LANGUAGES C)
+find_package(BEAM CONFIG REQUIRED COMPONENTS Runtime)
+include("${EXPORT}/BEAMPackageExport.cmake")
+add_executable(resource_consumer main.c)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(resource_consumer PRIVATE -Wall -Wextra -Werror -pedantic-errors)
+endif()
+target_link_libraries(resource_consumer PRIVATE BEAMPackageInputs BEAM::Runtime)
+add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPENDS resource_consumer)
+''')
+        resource_build = work / 'resource consumer build'
+        run(['cmake', '-S', consumer_c, '-B', resource_build,
+             '-DCMAKE_PREFIX_PATH='+str(prefix), '-DEXPORT='+str(exported)], work, 0, env)
+        run(['cmake', '--build', resource_build, '--config', 'Release', '--target', 'resource-check'], work, 0, env)
+
         # Read a valid, separately created format-1 archive and closure without
-        # mutating an immutable format-2 archive. All newly emitted records stay 2.
+        # mutating an immutable format-3 archive. New archive records use format 3.
         modern_leaf = artifact(leaf)
         modern_bytes = modern_leaf.read_bytes()
         with tarfile.open(modern_leaf, 'r:gz') as tar:
@@ -130,8 +158,9 @@ def main():
             for member in tar:
                 data = tar.extractfile(member).read()
                 if member.name == 'package.toml':
-                    assert tomllib.loads(data.decode())['format'] == 2
-                    data, count = re.subn(rb'("format"\s*=\s*)2', rb'\g<1>1', data, count=1)
+                    assert tomllib.loads(data.decode())['format'] == 3
+                    data = re.sub(rb'^"compiler-generation"[^\n]*\n', b'', data, flags=re.M)
+                    data, count = re.subn(rb'("format"\s*=\s*)3', rb'\g<1>1', data, count=1)
                     assert count == 1 and tomllib.loads(data.decode())['format'] == 1
                 legacy_entries.append((member.name, data, tarfile.REGTYPE))
         legacy_archive = work / 'legacy-format-1.bpkg.tar.gz'

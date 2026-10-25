@@ -49,3 +49,15 @@ if(BUILD_TESTING)
             --work "${CMAKE_CURRENT_BINARY_DIR}/task-checks")
     set_tests_properties(package-tasks PROPERTIES TIMEOUT 300)
 endif()
+
+set(BEAM_PACKAGE_IOS_DEVICE_SDK "" CACHE PATH "Explicit installed iOS device SDK for cross-target acceptance")
+set(BEAM_PACKAGE_IOS_SIMULATOR_SDK "" CACHE PATH "Explicit installed iOS simulator SDK for cross-target acceptance")
+if(BUILD_TESTING AND BEAM_PACKAGE_IOS_DEVICE_SDK AND BEAM_PACKAGE_IOS_SIMULATOR_SDK)
+    add_test(NAME package-cross-target
+        COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/cross.py"
+            --beam $<TARGET_FILE:BEAM::CLI> --payload "${_payload}"
+            --device-sdk "${BEAM_PACKAGE_IOS_DEVICE_SDK}"
+            --simulator-sdk "${BEAM_PACKAGE_IOS_SIMULATOR_SDK}"
+            --work "${CMAKE_CURRENT_BINARY_DIR}/cross-checks")
+    set_tests_properties(package-cross-target PROPERTIES TIMEOUT 600)
+endif()
