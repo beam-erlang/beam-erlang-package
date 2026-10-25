@@ -63,3 +63,11 @@ if(BUILD_TESTING AND BEAM_PACKAGE_FIRST_TARGET_SDK AND BEAM_PACKAGE_SECOND_TARGE
             --work "${CMAKE_CURRENT_BINARY_DIR}/cross-checks")
     set_tests_properties(package-cross-target PROPERTIES TIMEOUT 600)
 endif()
+
+if(BUILD_TESTING AND WIN32)
+    add_test(NAME package-process-ownership
+        COMMAND ${Python3_EXECUTABLE} -B "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_process.py")
+    set_tests_properties(package-process-ownership PROPERTIES TIMEOUT 30)
+    set_tests_properties(package-commands package-builds package-projects package-tasks
+        PROPERTIES ENVIRONMENT "PYTHONUTF8=1;PYTHONIOENCODING=utf-8")
+endif()

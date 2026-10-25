@@ -14,19 +14,13 @@ import tarfile
 import gzip
 import sys
 import tomllib
+from process import capture
 
 
 def run(argv, cwd, status=0, env=None):
-    p = subprocess.Popen([str(x) for x in argv], cwd=cwd, env=env,
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-    try:
-        out, err = p.communicate(timeout=180)
-    except BaseException:
-        os.killpg(p.pid, signal.SIGKILL)
-        p.communicate()
-        raise
-    assert p.returncode == status, (argv, p.returncode, out, err)
-    return out, err
+    result = capture(argv, cwd=cwd, env=env, text=False, timeout=180)
+    assert result.returncode == status, (argv, result.returncode, result.stdout, result.stderr)
+    return result.stdout, result.stderr
 
 
 def package(root, name, module, body='value()->42.', extra=''):
@@ -166,7 +160,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         legacy_archive = work / 'legacy-format-1.bpkg.tar.gz'
         legacy_bytes = tar_bytes(legacy_entries)
         legacy_archive.write_bytes(legacy_bytes)
-        legacy_dep = f'[dependencies]\n"test/leaf"={{version="1.0.0",archive="{legacy_archive}"}}\n'
+        legacy_dep = f'[dependencies]\n"test/leaf"={{version="1.0.0",archive="{legacy_archive.as_posix()}"}}\n'
         legacy_root = package(work / 'legacy-read', 'legacy-read', 'legacy_read', extra=legacy_dep)
         manifest = legacy_root / 'beam.toml'
         manifest.write_text(manifest.read_text().replace('format = 1', 'format = 2', 1))
@@ -196,7 +190,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         parent = package(work / 'parent', 'parent', 'parent', 'value()->leaf:value().', dep)
         build(parent)
         parent_archive = artifact(parent)
-        archive_dep = f'[dependencies]\n"test/parent" = {{version="1.0.0", archive="{parent_archive}", lock="{parent / "beam.lock"}"}}\n'
+        archive_dep = f'[dependencies]\n"test/parent" = {{version="1.0.0", archive="{parent_archive.as_posix()}", lock="{(parent / "beam.lock").as_posix()}"}}\n'
         consumer = package(work / 'consumer', 'consumer', 'consumer', extra=archive_dep)
         build(consumer)
         assert len(list((consumer / 'build/beam-pkg/artifacts').glob('*.gz'))) == 3
@@ -213,7 +207,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         assert (consumer / '.beam' / ('current-'+tomllib.loads((prefix/'lib/beam/sdk.toml').read_text())['build-id']+'.toml')).read_bytes() == current
         lock_path.write_text(selected_lock)
         text = (consumer / 'beam.toml').read_text()
-        (consumer / 'beam.toml').write_text(text.replace(f', lock="{parent / "beam.lock"}"', ''))
+        (consumer / 'beam.toml').write_text(text.replace(f', lock="{(parent / "beam.lock").as_posix()}"', ''))
         build(consumer, False, 'companion lock')
         (consumer / 'beam.toml').write_text(text)
         old = parent_archive.read_bytes()
@@ -222,7 +216,10 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         parent_archive.write_bytes(old)
         fifo_project = work / 'fifo'
         fifo_project.mkdir()
-        os.mkfifo(fifo_project / 'beam.toml')
+        if os.name == 'nt':
+            (fifo_project / 'beam.toml').mkdir()
+        else:
+            os.mkfifo(fifo_project / 'beam.toml')
         build(fifo_project, False, 'regular file')
         # Literal shell punctuation remains a directory name.
         literal = package(work / '$(touch unwanted); literal', 'literal', 'literal')
@@ -259,7 +256,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         assert (invalid / 'beam.lock').read_bytes() == baseline_invalid
 
         malformed = work / 'malformed.bpkg.tar.gz'
-        badroot = package(work / 'badarchive', 'badarchive', 'badarchive', extra=f'[dependencies]\n"test/x"={{version="1.0.0",archive="{malformed}"}}\n')
+        badroot = package(work / 'badarchive', 'badarchive', 'badarchive', extra=f'[dependencies]\n"test/x"={{version="1.0.0",archive="{malformed.as_posix()}"}}\n')
         for entries in [
             [('../escape', b'x', tarfile.REGTYPE)],
             [('/absolute', b'x', tarfile.REGTYPE)],
@@ -287,7 +284,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
 
         native = package(work / 'native', 'native', 'native', 'value()->nif:value().', '''[build.native]
     cmake = "."
-    outputs = ["priv/probe.so"]
+    outputs = ["probe"]
     ''')
         (native / 'CMakeLists.txt').write_text('''cmake_minimum_required(VERSION 3.25)
     project(probe LANGUAGES C)
@@ -295,7 +292,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
     add_library(probe MODULE probe.c)
     beam_target_nif(probe)
     set_target_properties(probe PROPERTIES PREFIX "")
-    install(TARGETS probe LIBRARY DESTINATION priv)
+    beam_package_native_output(probe NAME probe)
     ''')
         (native / 'probe.c').write_text('''#include <erl_nif.h>
     static ERL_NIF_TERM value(ErlNifEnv* env,int argc,const ERL_NIF_TERM argv[]) {return enif_make_int(env,73);}
@@ -307,12 +304,15 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
     load(P)->erlang:load_nif(P,0).
     value()->erlang:nif_error(not_loaded).
     ''')
-        (native / 'beam.toml').write_text((native / 'beam.toml').read_text().replace('["native.erl"]','["native.erl", "nif.erl"]'))
+        (native / 'beam.toml').write_text((native / 'beam.toml').read_text().replace('format = 1','format = 2',1).replace('["native.erl"]','["native.erl", "nif.erl"]'))
         build(native)
         narchive = artifact(native)
         extracted = work / 'extracted native'
         extracted.mkdir()
         with tarfile.open(narchive, 'r:gz') as tar:
+            native_record = tomllib.loads(tar.extractfile('package.toml').read().decode())
+            native_path = native_record['native']['identities']['probe']
+            assert native_record['native']['outputs'] == [native_path]
             for item in tar:
                 assert item.isfile() and not item.name.startswith('/') and '..' not in Path(item.name).parts
                 dest = extracted / item.name
@@ -325,14 +325,14 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
         run([sys.executable,prefix/'share/beam/tools/beam-application.py','create',
              '--root',extracted,'--inventory',extracted/'modules.txt','--entry','smoke:main',
              '--name','native-smoke','--version','1','--service','output',
-             '--native','nif=priv/probe.so','--output',extracted/'application.etf'],work,env=env)
+             '--native','nif='+native_path,'--output',extracted/'application.etf'],work,env=env)
         out,_=run([prefix/'bin/beam','run','--application',extracted/'application.etf'],work,env=env)
         assert out == b'NATIVE_OK\n'
         # A native inventory mismatch cannot change the selected lock.
         native_manifest = (native / 'beam.toml').read_text()
         native_lock = (native / 'beam.lock').read_bytes()
-        (native / 'beam.toml').write_text(native_manifest.replace('priv/probe.so', 'priv/missing.so'))
-        build(native, False, 'inventory')
+        (native / 'beam.toml').write_text(native_manifest.replace('outputs = ["probe"]', 'outputs = ["missing"]'))
+        build(native, False, 'native output')
         assert (native / 'beam.lock').read_bytes() == native_lock
         (native / 'beam.toml').write_text(native_manifest)
         # Matching-build native provenance is mandatory even for leaf archive inputs.
@@ -345,7 +345,7 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
             changed.append((name, data, kind))
         mismatch = work / 'mismatched.bpkg.tar.gz'
         mismatch.write_bytes(tar_bytes(changed))
-        mismatched_root = package(work / 'mismatched', 'mismatched', 'mismatched', extra=f'[dependencies]\n"test/native"={{version="1.0.0",archive="{mismatch}"}}\n')
+        mismatched_root = package(work / 'mismatched', 'mismatched', 'mismatched', extra=f'[dependencies]\n"test/native"={{version="1.0.0",archive="{mismatch.as_posix()}"}}\n')
         build(mismatched_root, False, 'SDK/target mismatch')
         # Relocate and remove all OTP assets; both builders remain usable.
 

@@ -150,7 +150,10 @@ def main():
         deployed = work / 'deployed λ'
         shutil.copytree(project / '.beam', deployed / '.beam')
         shutil.rmtree(project)
-        for relative in ('lib/beam/tools/compiler', 'libexec'):
+        removed = ['lib/beam/tools/compiler']
+        if os.name != 'nt':
+            removed.append('libexec')
+        for relative in removed:
             shutil.rmtree(prefix / relative)
         relocated = work / 'relocated SDK 日本語'
         prefix.rename(relocated)

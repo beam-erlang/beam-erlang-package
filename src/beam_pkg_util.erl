@@ -21,6 +21,7 @@
          command/3,
          hash/2,
          tool/2,
+         executable/1,
          text/1,
          safe/1]).
 fail(Text) ->
@@ -269,13 +270,18 @@ text(T) ->
 tool(Name, {_, _, Cwd, Search}) ->
     Windows = case erlang:system_info(os_type) of {win32,_} -> true; _ -> false end,
     Separator = case Windows of true -> $;; false -> $: end,
-    Executable = case Windows andalso not has_extension(Name) of true -> <<Name/binary,".exe">>; false -> Name end,
+    Executable = executable(Name),
     find_tool(Executable,
               [ 
                path(Cwd, D) ||
                    D <- split(Search, Separator)
               ]).
 has_extension(Name) -> length(split(base(slashes(Name)), $.)) > 1.
+executable(Name) ->
+    case erlang:system_info(os_type) of
+        {win32,_} -> case has_extension(Name) of false -> <<Name/binary,".exe">>; true -> Name end;
+        _ -> Name
+    end.
 find_tool(N, []) ->
     fail(["required executable not found: ", N]);
 find_tool(N, [D | T]) ->

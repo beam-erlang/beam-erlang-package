@@ -24,8 +24,8 @@ run(Directory, Context = {_, _, Cwd, _}, Target) ->
     SDK = map_get(sdk,Target),
     Work = path(Root, <<"build/beam-pkg">>),
     mkdir(Work),
-    Unique = integer_to_binary(erlang:system_time(nanosecond)),
-    Stage = path(Work, <<"stage-",Unique/binary>>),
+    Unique = integer_to_binary(erlang:system_time(nanosecond),36),
+    Stage = path(Work, <<"s-",Unique/binary>>),
     mkdir(Stage),
     Store = path(Work, <<"artifacts">>),
     mkdir(Store),
@@ -99,7 +99,7 @@ source(D, S) ->
             {Edges, S2} =
                 source_deps(sort(keys(Deps)), Deps, D, S1, #{}),
             SourceStage = path(map_get(stage, S),
-                               <<"source-",(integer_to_binary(erlang:unique_integer([positive])))/binary>>),
+                               <<"s-",(integer_to_binary(erlang:unique_integer([positive])))/binary>>),
             mkdir(SourceStage),
             Build = get(<<"build">>, M, #{}),
             Ebin = path(SourceStage, <<"ebin">>),
@@ -118,7 +118,7 @@ source(D, S) ->
                 ]
                 ++
                 dependency_includes(Edges, S2),
-            Compiler = path(map_get(prefix, S), <<"bin/beam">>),
+            Compiler = path(map_get(prefix, S), <<"bin/",(beam_pkg_util:executable(<<"beam">>))/binary>>),
             [ 
              begin
                  Src = path(D, P),
@@ -474,8 +474,8 @@ native(N, D, Stage, S, F) ->
     SDK = map_get(sdk, S),
     T=map_get(target,S),
     C = map_get(cmake, S),
-    B = path(Stage, <<"native-build">>),
-    Install = path(Stage, <<"native-install">>),
+    B = path(Stage, <<"b">>),
+    Install = path(Stage, <<"i">>),
     Guard = path(Stage, <<"native-target.cmake">>),
     write(Guard,iolist_to_binary([
         "if(NOT CMAKE_SYSTEM_NAME STREQUAL ",quote(map_get(<<"system">>,T)),
@@ -497,7 +497,9 @@ native(N, D, Stage, S, F) ->
     NativeTools = case map_get(<<"system">>,T) of
         <<"Windows">> ->
             Context = map_get(context,S),
-            [<<"-G">>,<<"Ninja">> |
+            [<<"-G">>,<<"Ninja">>,<<"-DCMAKE_TRY_COMPILE_CONFIGURATION=Release">>,
+             <<"-DCMAKE_POLICY_DEFAULT_CMP0141=NEW">>,
+             <<"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded">> |
                 [<<"-D",Variable/binary,"=",(beam_pkg_util:tool(Name,Context))/binary>> ||
                     {Variable,Name} <- [{<<"CMAKE_MAKE_PROGRAM">>,<<"ninja">>},
                         {<<"CMAKE_C_COMPILER">>,<<"cl">>},{<<"CMAKE_CXX_COMPILER">>,<<"cl">>},

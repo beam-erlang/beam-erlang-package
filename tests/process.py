@@ -2,12 +2,18 @@
 import os
 import signal
 import subprocess
+import shutil
 
 
-def capture(command, *, cwd, env, input=None, text=True, capture_output=True, timeout=90):
+def capture(command, *, cwd, env, input=None, text=True, capture_output=True, timeout=90, owned_helpers=()):
     if not capture_output:
         raise ValueError('Acceptance commands require captured output')
     command=[str(arg) for arg in command]
+    if os.name == 'nt' and not os.path.dirname(command[0]):
+        executable = shutil.which(command[0], path=(env or os.environ).get('PATH', ''))
+        if executable is None:
+            raise FileNotFoundError(command[0])
+        command[0] = os.path.abspath(executable)
     job = None
     if os.name == 'nt':
         from windows_process import Job
@@ -28,8 +34,11 @@ def capture(command, *, cwd, env, input=None, text=True, capture_output=True, ti
         raise
     try:
         out,err=child.communicate(input,timeout=timeout)
-        if job and job.active():
-            raise AssertionError('Owned package descendants survived the command')
+        helpers = []
+        if job and not job.settled():
+            if not owned_helpers:
+                raise AssertionError('Owned package descendants survived the command')
+            helpers = job.retire_helpers(owned_helpers)
     except BaseException:
         if job:
             job.terminate()
@@ -46,4 +55,5 @@ def capture(command, *, cwd, env, input=None, text=True, capture_output=True, ti
             child._handle.Close()
     result = subprocess.CompletedProcess(command,child.returncode,out,err)
     result.pid = child.pid
+    result.terminated_helpers = helpers
     return result

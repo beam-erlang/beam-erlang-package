@@ -90,7 +90,8 @@ project_arguments([<<"--project">>,Directory|Rest],Kind) when Directory =/= <<>>
 project_arguments(_,_) -> beam_pkg_util:fail("invalid project arguments").
 
 task_command({_,Prefix,_,_},[Name|Rest]) when Name=:=<<"beam">>; Name=:=<<"beam-pkg">> ->
-    [beam_pkg_util:path(Prefix,<<"bin/",Name/binary>>)|Rest];
+    Executable = beam_pkg_util:executable(Name),
+    [beam_pkg_util:path(Prefix,<<"bin/",Executable/binary>>)|Rest];
 task_command(_,Argv) -> Argv.
 
 unicode_list(B) -> [C || <<C/utf8>> <= B].

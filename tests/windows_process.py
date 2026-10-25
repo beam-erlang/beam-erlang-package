@@ -2,6 +2,8 @@
 import ctypes
 from ctypes import wintypes
 import time
+from pathlib import Path
+import os
 
 k = ctypes.WinDLL('kernel32', use_last_error=True)
 
@@ -96,6 +98,44 @@ class Job:
         data = Accounting()
         checked(query(self.handle, 1, ctypes.byref(data), ctypes.sizeof(data), None))
         return data.active
+
+    def settled(self):
+        # Job accounting can lag the process-handle signal at CRT exit.
+        # Require an empty job within a bounded grace period; live descendants
+        # still fail acceptance and are terminated by the caller.
+        deadline = time.monotonic() + 0.2
+        while self.active():
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return True
+
+    def retire_helpers(self, selected):
+        class Inventory(ctypes.Structure):
+            _fields_ = [('assigned', wintypes.DWORD), ('count', wintypes.DWORD),
+                        ('pids', ctypes.c_size_t * 256)]
+        inventory = Inventory()
+        checked(query(self.handle, 3, ctypes.byref(inventory), ctypes.sizeof(inventory), None))
+        if inventory.count > 256:
+            raise AssertionError('Compiler helper inventory exceeded its bound')
+        allowed = {os.path.normcase(str(Path(p).resolve(strict=True))) for p in selected}
+        open_process = function('OpenProcess', [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE)
+        image = function('QueryFullProcessImageNameW', [wintypes.HANDLE, wintypes.DWORD,
+                                                      wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)])
+        observed = []
+        for pid in inventory.pids[:inventory.count]:
+            process = checked(open_process(0x1000, False, pid))
+            try:
+                path = ctypes.create_unicode_buffer(32768)
+                length = wintypes.DWORD(len(path))
+                checked(image(process, 0, path, ctypes.byref(length)))
+                if os.path.normcase(path.value) not in allowed:
+                    raise AssertionError(f'Unexpected build descendant: {pid} {path.value}')
+                observed.append((pid, path.value))
+            finally:
+                checked(close(process))
+        self.terminate()
+        return observed
 
     def terminate(self):
         checked(stop(self.handle, 1))
