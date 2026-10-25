@@ -444,6 +444,10 @@ native_artifacts(N) ->
             <<"sdk:runtime">> -> ok;
             <<"system:m">> -> ok;
             <<"system:c++">> -> ok;
+            Android when Android=:=<<"system:android">>; Android=:=<<"system:log">>;
+                         Android=:=<<"system:dl">>; Android=:=<<"system:c++_shared">> ->
+                case map_get(<<"os">>,map_get(<<"sdk">>,N)) of
+                    <<"Android">> -> ok; _ -> fail("Android native dependency on another target") end;
             <<"output:",Other/binary>> -> case is_map_key(Other,A) andalso Other=/=Name of
                 true -> ok; false -> fail("unresolved native dependency") end;
             _ -> fail("unsupported native dependency")

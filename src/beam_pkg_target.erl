@@ -1,7 +1,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 %% Host execution and target linkage are separate, verified selections.
 -module(beam_pkg_target).
--export([select/2, compatible/2, arguments/2]).
+-export([select/2, compatible/2, arguments/2, verify_native/3]).
 -import(beam_pkg_util,[path/2,read/1,get/3,fail/1]).
 
 select(Context={_,Host,Cwd,_},Selected) ->
@@ -55,3 +55,23 @@ arguments([<<"--output">>,P|Rest],true,M,D) when P=/=<<>> ->
 arguments([<<"-",_/binary>>|_],_,_,_) -> fail("invalid arguments");
 arguments([P|Rest],E,M,false) when P=/=<<>> -> arguments(Rest,E,M#{directory:=P},true);
 arguments(_,_,_,_) -> fail("invalid arguments").
+
+
+%% Inspection uses the selected NDK host tool; target code is never executed.
+verify_native([],_,_) -> ok;
+verify_native(Files,Stage,S) ->
+    case map_get(<<"system">>,map_get(target,S)) of
+        <<"Android">> ->
+            Input=path(Stage,<<"android-native-check.cmake">>),
+            ABI=map_get(<<"android-abi">>,map_get(target,S)),
+            beam_pkg_util:write(Input,iolist_to_binary([
+                "set(BEAM_ANDROID_ABI ",cmake_quote(ABI),")\n",
+                "set(BEAM_ANDROID_NATIVE_FILES\n",[[cmake_quote(P),"\n"] || P<-Files],")\n"])),
+            try
+                _=beam_pkg_util:command(map_get(cmake,S),
+                    [<<"-DBEAM_ANDROID_NATIVE_INPUTS=",Input/binary>>,<<"-P">>,
+                     path(map_get(target_prefix,S),<<"lib/cmake/BEAM/BEAMVerifyAndroidNative.cmake">>)],Stage),ok
+            after beam_pkg_util:remove(Input) end;
+        _ -> ok
+    end.
+cmake_quote(B) -> iolist_to_binary([$",[case C of $\\ -> "\\\\"; $" -> "\\\""; $$ -> "\\$"; $; -> "\\;"; _ -> C end || <<C>> <= B],$"]).

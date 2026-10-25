@@ -13,8 +13,10 @@ from scratch import scratch
 
 def main():
     p=argparse.ArgumentParser()
-    for key in ('beam','payload','device-sdk','simulator-sdk','work'):
+    for key in ('beam','payload','work'):
         p.add_argument('--'+key,required=True,type=Path)
+    p.add_argument('--first-sdk','--device-sdk',dest='first_sdk',required=True,type=Path)
+    p.add_argument('--second-sdk','--simulator-sdk',dest='second_sdk',required=True,type=Path)
     a=p.parse_args();root=a.work.resolve();root.mkdir(parents=True,exist_ok=True)
     with scratch(root):
         host=root/'host';shutil.copytree(a.beam.resolve().parent.parent,host,symlinks=True)
@@ -63,7 +65,7 @@ ERL_NIF_INIT(cross,f,NULL,NULL,NULL,NULL)
         def invoke(command,sdk,*extra,ok=True):
             return run(tool,command,'--target-sdk',sdk,*extra,project,ok=ok)
         selections=[];archives={}
-        for sdk in (a.device_sdk.resolve(),a.simulator_sdk.resolve()):
+        for sdk in (a.first_sdk.resolve(),a.second_sdk.resolve()):
             invoke('build',sdk)
             lock=tomllib.loads((project/'beam.lock').read_text());assert lock['format']==2
             assert len(lock['selections'])==len(selections)+1
@@ -86,19 +88,19 @@ ERL_NIF_INIT(cross,f,NULL,NULL,NULL,NULL)
         for path,data in archives.items(): assert path.read_bytes()==data
         environment_files=list((project/'.beam/environments').glob('*/environment.toml'))
         assert len(environment_files)==2
-        # A well-formed lock cannot substitute a simulator native archive for device.
+        # A well-formed lock cannot substitute a another target native archive for the first SDK.
         lock_path=project/'beam.lock';saved_lock=lock_path.read_text()
         lock_path.write_text(saved_lock.replace(selections[0],selections[1]))
-        message=invoke('install',a.device_sdk,ok=False)
+        message=invoke('install',a.first_sdk,ok=False)
         assert 'SDK/target mismatch' in message,message
         lock_path.write_text(saved_lock)
         # Undeclared native link inputs cannot leak absolute build-host paths.
         recipe=native/'CMakeLists.txt';recipe.write_text(recipe.read_text()+
             '\ntarget_link_libraries(cross_native PRIVATE "/undeclared/host/library.a")\n')
-        invoke('build',a.device_sdk,ok=False)
+        invoke('build',a.first_sdk,ok=False)
         assert lock_path.read_text()==saved_lock
         # Attested generation facts are verified before either compiler is selected.
-        bad_generation=root/'wrong-generation';shutil.copytree(a.device_sdk,bad_generation,symlinks=True)
+        bad_generation=root/'wrong-generation';shutil.copytree(a.first_sdk,bad_generation,symlinks=True)
         facts_path=bad_generation/'lib/beam/target.toml';facts=facts_path.read_text()
         generation=tomllib.loads(facts)['compiler-generation']
         facts_path.write_text(facts.replace(generation,'0'*64))
@@ -118,13 +120,13 @@ ERL_NIF_INIT(cross,f,NULL,NULL,NULL,NULL)
         # Source and build outputs are not inputs to export.
         shutil.rmtree(native);(project/'cross.erl').unlink();shutil.rmtree(project/'build')
         output=root/'export'
-        invoke('export',a.device_sdk,'--output',output)
+        invoke('export',a.first_sdk,'--output',output)
         first=os.readlink(output/'current')
         exported=tomllib.loads((output/'current/export.toml').read_text());assert exported['format']==1
         assert list((output/'current').rglob('payload.txt'))
         assert 'beam_package_linked_nifs' in (output/'current/registration.c').read_text()
         assert str(root) not in (output/'current/package.cmake').read_text()
-        invoke('export',a.simulator_sdk,'--output',output)
+        invoke('export',a.second_sdk,'--output',output)
         assert os.readlink(output/'current')!=first
         consumer=root/'consumer';consumer.mkdir()
         (consumer/'main.c').write_text('#include "registration.h"\nint main(void) { return beam_package_linked_nifs(0,0)!=1; }\n')
@@ -139,23 +141,23 @@ target_link_libraries(consumer PRIVATE BEAMPackageInputs BEAM::Runtime)
             return run('cmake','-S',consumer,'-B',build,'-G','Ninja',
                 '-DCMAKE_TOOLCHAIN_FILE='+str(sdk.resolve()/'lib/cmake/BEAM/BEAMToolchain.cmake'),
                 '-DEXPORT='+str(output),ok=ok)
-        configure(a.device_sdk,root/'wrong-slice',ok=False)
-        configure(a.simulator_sdk,root/'consumer-build')
+        configure(a.first_sdk,root/'wrong-slice',ok=False)
+        configure(a.second_sdk,root/'consumer-build')
         run('cmake','--build',root/'consumer-build')
 
         # Failure after a prior export must leave its selected generation usable.
         selected=os.readlink(output/'current')
         files=[x for x in (project/'.beam/environments').rglob('payload.txt')]
         for x in files:x.write_text('tampered installed resource\n')
-        invoke('export',a.simulator_sdk,'--output',output,ok=False)
+        invoke('export',a.second_sdk,'--output',output,ok=False)
         assert os.readlink(output/'current')==selected
         assert (output/'current/registration.c').is_file()
         # The installed toolchain is a verified input, never an optional host fallback.
-        bad=root/'missing-toolchain';shutil.copytree(a.device_sdk,bad,symlinks=True)
+        bad=root/'missing-toolchain';shutil.copytree(a.first_sdk,bad,symlinks=True)
         (bad/'lib/cmake/BEAM/BEAMToolchain.cmake').unlink()
         invoke('build',bad,ok=False)
         # No target executable is needed or permitted by the SDK contract.
-        for sdk in (a.device_sdk,a.simulator_sdk):
+        for sdk in (a.first_sdk,a.second_sdk):
             assert not (sdk/'bin/beam').exists() and not (sdk/'bin/beam-pkg').exists()
         print('cross-target selections, provenance, installed-only export, atomic recovery: passed')
 

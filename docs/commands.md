@@ -121,7 +121,9 @@ chaining, automatic build/install or project discovery are provided.
 
 The target defaults to the executing SDK. The executing SDK supplies the verified
 compiler; the target supplies native headers, libraries, capabilities, identity
-and installed consumer toolchain. iOS builds require explicit `DEVELOPER_DIR`.
+and installed consumer toolchain. iOS builds require explicit `DEVELOPER_DIR`;
+Android builds require explicit `ANDROID_NDK_ROOT` matching the SDK’s pinned
+NDK revision. Target binaries are never executed during package builds.
 Target binaries never execute. Compatible compiler generations permit portable
 bytecode; native archives require exact target identity. `run`, `shell` and
 `task` continue to operate on the local host selection.
@@ -132,3 +134,11 @@ invalid installed inputs fail before replacing the prior output. Formats and
 the relocatable output tree are owned by [package formats](package-format.md).
 Keep the full export directory for builds; copy only declared runtime assets
 into an application. Xcode handles framework embedding and signing.
+
+Android exports also publish shared-NIF module/library-name arrays in
+`registration.h`; applications resolve those names only against their explicitly
+selected installed images and construct `beam_nif_spec` entries. The export does
+not discover or load libraries. `BEAM_PACKAGE_NATIVE_TARGETS` names the generated
+CMake imports so the installed Android adapter can retain their complete native
+closure through Gradle. The same export remains usable by ordinary filesystem
+consumers. Xcode configuration files are emitted only for Apple selections.

@@ -136,7 +136,7 @@ CMake helper. The helper links the interface-only `BEAM::NIF` target and embeds 
 matching-build SDK descriptor without an absolute runtime-link path.
 
 Native builds support matching host Linux and Darwin interpreter and JIT prefixes,
-and explicit iOS device/simulator targets using the target SDK’s installed
+and explicit iOS device/simulator or Android ABI/flavor targets using the target SDK’s installed
 consumer toolchain. The executing SDK supplies the attested Erlang compiler. Native metadata records output paths, the `cmake`
 recipe kind and matching SDK provenance (distribution identity, source/config
 build ID, OS, architecture, triple and flavor). Native archive dependencies must
@@ -278,7 +278,7 @@ older archives and other lock selections are preserved.
 | `files` | Complete installed file inventory, including generated registration headers. |
 | `sdk-build-id` | Exact target SDK identity. |
 | `language` | `C` or `CXX`. |
-| `dependencies` | Supported `output:<logical-name>`, `sdk:runtime`, `system:m`, or `system:c++` dependencies; arbitrary flags and absolute host paths are rejected. |
+| `dependencies` | Supported `output:<logical-name>`, `sdk:runtime`, `system:m`, or `system:c++` dependencies; Android additionally permits `system:android`, `system:log`, `system:dl`, and `system:c++_shared`; arbitrary flags and absolute host paths are rejected. |
 | `module`, `binding`, `header` | Optional complete static linked-NIF registration selection, C accessor symbol and installed header. |
 
 The existing `outputs`, `identities` and module-to-path `nifs` mappings remain
@@ -296,14 +296,15 @@ existing local workflow but must be reinstalled before export.
 
 An export contains complete generations beneath `.generations/`; `current` is a
 relative symlink switched by one atomic rename only after validation and staging.
-Stable `BEAMPackageExport.cmake` and `.xcconfig` entry files select it. A failed
+The stable `BEAMPackageExport.cmake` entry selects it; Apple targets additionally
+emit `BEAMPackageExport.xcconfig`. A failed
 export preserves the previous selection. Copy the complete directory when
 relocating it. CMake resolves the generation at configuration time; consumers
 must reconfigure to adopt a newer selection.
 
 Each generation contains `export.toml` (format 1), package files by archive digest,
 `registration.c/.h`, `package_inventory.h`, `package.cmake`, and
-`package.xcconfig`. The inventory records exact SDK identity, compiler generation,
+Apple-only `package.xcconfig`. The inventory records exact SDK identity, compiler generation,
 the selected root, package metadata and file digests. Generated registration
 accessors select only declared linked NIFs. CMake verifies package file hashes
 and target SDK identity, exposes `BEAMPackageInputs` and `BEAM_PACKAGE_ASSETS`,
@@ -312,3 +313,18 @@ and imports native link inputs. Xcode configuration paths use the consumer's
 
 SDK framework deployment belongs to SDK tooling. The exporter neither assembles
 nor signs an application, executes target code, nor acquires source dependencies.
+
+
+### Android native validation
+
+Android supports static linked NIFs and shared native artifacts. Build and export
+inspect every native primary artifact with the explicitly selected NDK host
+`llvm-readelf`; neither operation executes target code. Shared libraries require
+the selected ABI, 16 KB load alignment, a basename SONAME, and a complete supported
+ELF dependency closure. Conflicting names, absolute/unsupported search paths and
+undeclared public dependency kinds fail before lock or export publication.
+
+CMake exports remain platform neutral. Android assembly consumes the selected
+SDK and export separately, stages assets under an ABI-specific root without
+merging same-named files, and packages dependencies through Gradle's native graph.
+SDK AAR/Prefab generation and final APK/AAB assembly are outside package export.

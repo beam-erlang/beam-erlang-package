@@ -483,13 +483,15 @@ native(N, D, Stage, S, F) ->
         "find_package(BEAM REQUIRED CONFIG PATHS ",quote(path(map_get(target_prefix,S),<<"lib/cmake/BEAM">>))," NO_DEFAULT_PATH)\n",
         "if(NOT BEAM_SDK_BUILD_ID STREQUAL ",quote(map_get(<<"build-id">>,SDK)),
         ")\nmessage(FATAL_ERROR \"Native package selected the wrong SDK\")\nendif()\n"])),
-    Toolchain=case map_get(<<"system">>,T) of
-        <<"iOS">> -> [<<"-DCMAKE_TOOLCHAIN_FILE=",(path(map_get(target_prefix,S),<<"lib/cmake/BEAM/BEAMToolchain.cmake">>))/binary>>];
-        _ ->
+    InstalledToolchain=path(map_get(target_prefix,S),<<"lib/cmake/BEAM/BEAMToolchain.cmake">>),
+    Toolchain=case beam_pkg_util:info(InstalledToolchain) of
+        {ok,#{type:=regular}} -> [<<"-DCMAKE_TOOLCHAIN_FILE=",InstalledToolchain/binary>>];
+        {error,#{kind:=not_found}} ->
             H=map_get(host_target,S),
             case {map_get(<<"system">>,T),map_get(<<"architecture">>,T)} =:=
                  {map_get(<<"system">>,H),map_get(<<"architecture">>,H)} of
-                true -> []; false -> fail("target SDK has no supported consumer toolchain") end
+                true -> []; false -> fail("target SDK has no supported consumer toolchain") end;
+        _ -> fail("invalid installed consumer toolchain")
     end,
     diagnostic(beam_pkg_util:command(C,
                                      [<<"-S">>,
@@ -526,6 +528,7 @@ native(N, D, Stage, S, F) ->
             fail("native installed inventory differs from declared outp"
                  "uts")
     end,
+    beam_pkg_target:verify_native([path(Install,map_get(<<"path">>,R)) || _:=R<-Artifacts],Stage,S),
     {add_files([ 
                 {P, read(path(Install, P))} ||
                     P <- Outputs

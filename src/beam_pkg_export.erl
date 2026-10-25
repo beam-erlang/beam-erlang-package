@@ -24,12 +24,15 @@ run(Directory,Output,Context={_,_,Cwd,_},S) ->
     try
         [beam_pkg_target:compatible(map_get(meta,N),S) || _:=N<-Nodes],
         Records=copy_nodes(sort(keys(Nodes)),Nodes,Stage,C,#{}),
-        {Registrations,Native,CMakeLinks,XcodeLinks}=native(Nodes),
+        NativePaths=append([[path(Stage,<<"packages/",H/binary,"/",(map_get(<<"path">>,A))/binary>>) ||
+            _:=A<-get(<<"artifacts">>,map_get(native_meta,N),#{})] || H:=N<-Nodes]),
+        beam_pkg_target:verify_native(NativePaths,Stage,S),
+        {Registrations,Shared,Native,CMakeLinks,XcodeLinks}=native(Nodes),
         Registration=iolist_to_binary([
             "/* Generated package linked NIF selections. */\n#include <beam.h>\n",
             [["extern const beam_linked_nif_spec *",Symbol,"(void);\n"] || Symbol<-Registrations]]),
         Count=integer_to_binary(length(Registrations)),
-        write(path(Stage,<<"registration.c">>),[Registration,
+        write(path(Stage,<<"registration.c">>),[Registration,shared_registration(Shared),
             "size_t beam_package_linked_nifs(beam_linked_nif_spec *out, size_t capacity) {\n",
             case Registrations of
                 [] -> " (void)out; (void)capacity;\n";
@@ -37,7 +40,7 @@ run(Directory,Output,Context={_,_,Cwd,_},S) ->
             [ [" out[",integer_to_binary(I),"] = *",Symbol,"();\n"] || {I,Symbol}<-indexed(Registrations,0)],
             " return ",Count,";\n}\n"]),
         write(path(Stage,<<"registration.h">>),
-            <<"#include <beam.h>\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nsize_t beam_package_linked_nifs(beam_linked_nif_spec *, size_t);\n#ifdef __cplusplus\n}\n#endif\n">>),
+            <<"#include <beam.h>\n#ifdef __cplusplus\nextern \"C\" {\n#endif\nsize_t beam_package_linked_nifs(beam_linked_nif_spec *, size_t);\nextern const size_t beam_package_shared_nif_count;\nextern const char *const beam_package_shared_nif_modules[];\nextern const char *const beam_package_shared_nif_libraries[];\n#ifdef __cplusplus\n}\n#endif\n">>),
         SDK=map_get(sdk,S),
         Inventory=#{<<"format">>=>1,<<"sdk">>=>SDK,<<"compiler-generation">>=>map_get(generation,S),
             <<"root">>=>Root,<<"packages">>=>Records},
@@ -51,16 +54,21 @@ run(Directory,Output,Context={_,_,Cwd,_},S) ->
             "target_sources(BEAMPackageInputs INTERFACE \"${_beam_export_root}/registration.c\")\n",
             "target_include_directories(BEAMPackageInputs INTERFACE \"${_beam_export_root}\")\n",
             Native,"target_link_libraries(BEAMPackageInputs INTERFACE ",CMakeLinks,")\n",
+            "set(BEAM_PACKAGE_NATIVE_TARGETS ",CMakeLinks,")\n",
             "set(BEAM_PACKAGE_EXPORT_ROOT \"${_beam_export_root}\")\n"]),
-        write(path(Stage,<<"package.xcconfig">>),[
+        Apple=beam_pkg_util:member(map_get(<<"system">>,map_get(target,S)),[<<"Darwin">>,<<"iOS">>]),
+        case Apple of true -> write(path(Stage,<<"package.xcconfig">>),[
             "// BEAM_PACKAGE_EXPORT is supplied by the application build.\n",
             "BEAM_PACKAGE_SDK_BUILD_ID = ",map_get(<<"build-id">>,SDK),"\n",
-            "OTHER_LDFLAGS = $(inherited) ",XcodeLinks,"\n"]),
+            "OTHER_LDFLAGS = $(inherited) ",XcodeLinks,"\n"]); false -> ok end,
         rename(Stage,Final),
         %% Stable wrappers only refer to the single atomic selection pointer.
         write_once(path(Destination,<<"BEAMPackageExport.cmake">>),
             <<"file(REAL_PATH \"${CMAKE_CURRENT_LIST_DIR}/current\" _beam_selected_export)\ninclude(\"${_beam_selected_export}/package.cmake\")\n">>),
-        write_once(path(Destination,<<"BEAMPackageExport.xcconfig">>),<<"#include \"current/package.xcconfig\"\n">>),
+        case Apple of
+            true -> write_once(path(Destination,<<"BEAMPackageExport.xcconfig">>),<<"#include \"current/package.xcconfig\"\n">>);
+            false -> ok
+        end,
         _=beam_pkg_util:command(C,[<<"-E">>,<<"create_symlink">>,<<".generations/",Unique/binary>>,Pending],Destination),
         rename(Pending,path(Destination,<<"current">>)),
         {ok,Destination}
@@ -113,7 +121,19 @@ native(Nodes) ->
     Xcode=[[xq(["$(BEAM_PACKAGE_EXPORT)/current/",relative_native(H,R)])," ",
         join([link(D,H,Names,xcode) || D<-map_get(<<"dependencies">>,R)]," "),
         case map_get(<<"language">>,R) of <<"CXX">> -> " -lc++"; _ -> [] end," "] || {{H,_},R,_}<-Items],
-    {Registrations,CMake,join([map_get(Key,Names) || {Key,_,_}<-Items]," "),Xcode}.
+    Shared=[{Module,native_basename(P,P)} || {_,R,Nifs}<-Items,
+        map_get(<<"kind">>,R)=:=<<"shared">>,Module<-sort(keys(Nifs)),
+        P<-[map_get(Module,Nifs)],P=:=map_get(<<"path">>,R)],
+    {Registrations,Shared,CMake,join([map_get(Key,Names) || {Key,_,_}<-Items]," "),Xcode}.
+native_basename(<<>>,Name) -> Name;
+native_basename(<<$/,Rest/binary>>,_) -> native_basename(Rest,Rest);
+native_basename(<<_,Rest/binary>>,Name) -> native_basename(Rest,Name).
+shared_registration(Shared) ->
+    ["const size_t beam_package_shared_nif_count = ",integer_to_binary(length(Shared)),";\n",
+     "const char *const beam_package_shared_nif_modules[] = {",
+     case Shared of [] -> "0"; _ -> join([["\"",M,"\""] || {M,_}<-Shared],",") end,"};\n",
+     "const char *const beam_package_shared_nif_libraries[] = {",
+     case Shared of [] -> "0"; _ -> join([["\"",P,"\""] || {_,P}<-Shared],",") end,"};\n"].
 relative_native(H,R) -> <<"packages/",H/binary,"/",(map_get(<<"path">>,R))/binary>>.
 link(<<"sdk:runtime">>,_,_,cmake) -> "BEAM::Runtime";
 link(<<"sdk:runtime">>,_,_,xcode) -> "-framework BEAM";
