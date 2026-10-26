@@ -481,6 +481,13 @@ native(N, D, Stage, S, F) ->
         "if(NOT CMAKE_SYSTEM_NAME STREQUAL ",quote(map_get(<<"system">>,T)),
         " OR NOT CMAKE_SYSTEM_PROCESSOR STREQUAL ",quote(map_get(<<"processor">>,T)),
         ")\nmessage(FATAL_ERROR \"Native package target must match installed SDK\")\nendif()\n",
+        "set(_beam_package_language C)\nif(NOT CMAKE_C_COMPILER_LOADED)\nset(_beam_package_language CXX)\nendif()\n",
+        "set(_beam_package_compiler \"${CMAKE_${_beam_package_language}_COMPILER_ID}\")\n",
+        "if(_beam_package_compiler)\n",
+        "if(CMAKE_${_beam_package_language}_SIMULATE_ID)\nstring(APPEND _beam_package_compiler \"-${CMAKE_${_beam_package_language}_SIMULATE_ID}\")\n",
+        "elseif(MINGW)\nstring(APPEND _beam_package_compiler \"-MinGW\")\nendif()\n",
+        "if(NOT _beam_package_compiler STREQUAL ",quote(map_get(<<"compiler-environment">>,T)),
+        ")\nmessage(FATAL_ERROR \"Native package compiler must match installed SDK\")\nendif()\nendif()\n",
         "find_package(BEAM REQUIRED CONFIG PATHS ",quote(path(map_get(target_prefix,S),<<"lib/cmake/BEAM">>))," NO_DEFAULT_PATH)\n",
         "if(NOT BEAM_SDK_BUILD_ID STREQUAL ",quote(map_get(<<"build-id">>,SDK)),
         ")\nmessage(FATAL_ERROR \"Native package selected the wrong SDK\")\nendif()\n"])),
@@ -497,14 +504,24 @@ native(N, D, Stage, S, F) ->
     NativeTools = case map_get(<<"system">>,T) of
         <<"Windows">> ->
             Context = map_get(context,S),
-            [<<"-G">>,<<"Ninja">>,<<"-DCMAKE_TRY_COMPILE_CONFIGURATION=Release">>,
-             <<"-DCMAKE_POLICY_DEFAULT_CMP0141=NEW">>,
-             <<"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded">> |
+            WindowsCompiler = map_get(<<"compiler-environment">>,T),
+            {Options, Tools} = case WindowsCompiler of
+                <<"GNU-MinGW">> ->
+                    {[], [{<<"CMAKE_C_COMPILER">>,<<"gcc">>},
+                        {<<"CMAKE_CXX_COMPILER">>,<<"g++">>},
+                        {<<"CMAKE_LINKER">>,<<"ld">>},{<<"CMAKE_AR">>,<<"ar">>},
+                        {<<"CMAKE_RC_COMPILER">>,<<"windres">>}]};
+                <<"MSVC">> ->
+                    {[<<"-DCMAKE_POLICY_DEFAULT_CMP0141=NEW">>,
+                      <<"-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded">>],
+                     [{<<"CMAKE_C_COMPILER">>,<<"cl">>},{<<"CMAKE_CXX_COMPILER">>,<<"cl">>},
+                      {<<"CMAKE_LINKER">>,<<"link">>},{<<"CMAKE_AR">>,<<"lib">>},
+                      {<<"CMAKE_RC_COMPILER">>,<<"rc">>}]};
+                _ -> fail("unsupported Windows SDK compiler environment")
+            end,
+            [<<"-G">>,<<"Ninja">>,<<"-DCMAKE_TRY_COMPILE_CONFIGURATION=Release">>] ++ Options ++
                 [<<"-D",Variable/binary,"=",(beam_pkg_util:tool(Name,Context))/binary>> ||
-                    {Variable,Name} <- [{<<"CMAKE_MAKE_PROGRAM">>,<<"ninja">>},
-                        {<<"CMAKE_C_COMPILER">>,<<"cl">>},{<<"CMAKE_CXX_COMPILER">>,<<"cl">>},
-                        {<<"CMAKE_LINKER">>,<<"link">>},{<<"CMAKE_AR">>,<<"lib">>},
-                        {<<"CMAKE_RC_COMPILER">>,<<"rc">>}]]];
+                    {Variable,Name} <- [{<<"CMAKE_MAKE_PROGRAM">>,<<"ninja">>} | Tools]];
         _ -> []
     end,
     diagnostic(beam_pkg_util:command(C,

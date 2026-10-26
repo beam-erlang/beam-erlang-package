@@ -101,12 +101,16 @@ def main():
         denied = project / 'denied'
         denied.mkdir()
         if os.name == 'nt':
-            compiler = Path(shutil.which('cl.exe', path=env['PATH'])).resolve(strict=True)
+            facts = tomllib.loads((prefix/'lib/beam/target.toml').read_text(encoding='utf-8'))
+            gnu = facts['compiler-environment'] == 'GNU-MinGW'
+            compiler = Path(shutil.which('gcc.exe' if gnu else 'cl.exe', path=env['PATH'])).resolve(strict=True)
             source = root/'local.c'
             source.write_text('#include <stdio.h>\nint main(void){puts("LOCAL");return 0;}\n')
-            built = capture([compiler,'/nologo','/Z7','/MD',source,
-                '/Fe'+str(project/'local-command.exe'),'/link','/INCREMENTAL:NO'],
-                cwd=root,env=env,timeout=60,owned_helpers=[compiler.with_name('vctip.exe')])
+            command = ([compiler, source, '-o', project/'local-command.exe'] if gnu else
+                [compiler,'/nologo','/Z7','/MD',source,
+                 '/Fe'+str(project/'local-command.exe'),'/link','/INCREMENTAL:NO'])
+            built = capture(command, cwd=root,env=env,timeout=60,
+                owned_helpers=[] if gnu else [compiler.with_name('vctip.exe')])
             assert built.returncode == 0, (built.stdout,built.stderr)
             (denied/'local-command.exe').mkdir()
             env['PATH'] = 'denied;.'

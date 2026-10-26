@@ -18,7 +18,7 @@ plugins are deferred. See [commands](docs/commands.md) and
 
 Use a matching installed BEAM/Erlang SDK, including its owned compiler tooling.
 From this repository, select a matching Linux, macOS ARM64 or native Windows AMD64
-MSVC EMU/JIT installation:
+MSVC or UCRT64 GCC EMU/JIT installation:
 
 ```sh
 cmake -S . -B build/linux-emu \
@@ -34,17 +34,24 @@ module inventory, `modules.txt` and generic `application.etf` descriptor under
 bound to the selected installed `beam`. It supplies no VM. The payload is not
 itself a `.bpkg.tar.gz` package.
 
-The command, build, project, task and process-ownership suitesuse private copies of the
+The command, build, project, task and process-ownership suites use private copies of the
 selected SDK with freshly compiled package policy. They cover immutable archives,
 format-1 read compatibility, format-2 publication, native builds and actual NIF
 execution through explicit modern composition, failure recovery, relocation,
 project shells and native task handoff. On POSIX the task check verifies that native exec
 retains the launched tool PID and process group. Windows checks preserve literal
 arguments, exit status and interactive ConPTY input/output through native launchers. No suite modifies the input SDK.
-Native Windows package compilation requires the x64 Visual Studio developer
-environment, CMake and Ninja. Installed commands run from ordinary PowerShell.
+Native Windows package compilation requires CMake, Ninja and the compiler family
+recorded by the installed SDK. MSVC builds require the x64 Visual Studio developer
+environment. UCRT64 GCC builds require the matching native GCC/G++ and companion
+tools on PATH; use the prepared UTF-8 toolchain described in the
+[BEAM build guide](../beam-erlang/README.md#native-windows-development) for Unicode
+project paths. Keep MSVC and GCC native archives and extensions separate.
+Installed commands run from ordinary PowerShell without either build environment.
 Windows CMake resource exports use atomic selector files so symlink privileges
 are not required. See the [Windows development record](../dev-documents/windows-development-baseline.md).
+The separate [UCRT64 GCC record](../dev-documents/windows-ucrt64-development.md)
+includes native C/C++ recipes and the matching SDK/compiler requirements.
 Python 3.11+ is required; native recipes additionally require their selected CMake
 and C/C++ toolchain. Tests import no sibling runtime or playground sources.
 

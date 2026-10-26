@@ -331,6 +331,26 @@ add_custom_target(resource-check COMMAND "$<TARGET_FILE:resource_consumer>" DEPE
              '--native','nif='+native_path,'--output',extracted/'application.etf'],work,env=env)
         out,_=run([prefix/'bin/beam','run','--application',extracted/'application.etf'],work,env=env)
         assert out == b'NATIVE_OK\n'
+        if os.name == 'nt' and tomllib.loads((prefix/'lib/beam/target.toml').read_text())['compiler-environment'] == 'GNU-MinGW':
+            # C++-only recipes must select G++ from the SDK's compiler family.
+            # Their installed extensions need the bundled C++ runtime on EMU too.
+            recipe = native/'CMakeLists.txt'
+            recipe.write_text(recipe.read_text().replace('LANGUAGES C)', 'LANGUAGES CXX)').replace('probe.c)', 'probe.cpp)'))
+            source = (native/'probe.c').read_text().replace('#include <erl_nif.h>', '#include <erl_nif.h>\n#include <string>')
+            source = source.replace('return enif_make_int(env,73);',
+                'std::string text(128, char(argc+1)); return enif_make_int(env,int(text.size())-55);')
+            (native/'probe.cpp').write_text(source)
+            build(native)
+            with tarfile.open(artifact(native), 'r:gz') as tar:
+                (extracted/native_path).write_bytes(tar.extractfile(native_path).read())
+            run([sys.executable,prefix/'share/beam/tools/beam-application.py','create',
+                 '--root',extracted,'--inventory',extracted/'modules.txt','--entry','smoke:main',
+                 '--name','native-smoke','--version','1','--service','output',
+                 '--native','nif='+native_path,'--output',extracted/'application.etf'],work,env=env)
+            runtime_env = env.copy()
+            runtime_env['PATH'] = os.pathsep.join([str(prefix/'bin'), str(Path(os.environ['SystemRoot'])/'System32'), os.environ['SystemRoot']])
+            out,err=run([prefix/'bin/beam','run','--application',extracted/'application.etf'],work,env=runtime_env)
+            assert out == b'NATIVE_OK\n' and not err, (out,err)
         # A native inventory mismatch cannot change the selected lock.
         native_manifest = (native / 'beam.toml').read_text()
         native_lock = (native / 'beam.lock').read_bytes()
