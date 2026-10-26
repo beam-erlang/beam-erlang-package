@@ -63,14 +63,26 @@ run(Directory,Output,Context={_,_,Cwd,_},S) ->
             "OTHER_LDFLAGS = $(inherited) ",XcodeLinks,"\n"]); false -> ok end,
         rename(Stage,Final),
         %% Stable wrappers only refer to the single atomic selection pointer.
-        write_once(path(Destination,<<"BEAMPackageExport.cmake">>),
-            <<"file(REAL_PATH \"${CMAKE_CURRENT_LIST_DIR}/current\" _beam_selected_export)\ninclude(\"${_beam_selected_export}/package.cmake\")\n">>),
+        Windows=case erlang:system_info(os_type) of {win32,_}->true;_->false end,
+        Wrapper=case Windows of
+            true -> <<"include(\"${CMAKE_CURRENT_LIST_DIR}/current.cmake\")\ninclude(\"${_beam_selected_export}/package.cmake\")\n">>;
+            false -> <<"file(REAL_PATH \"${CMAKE_CURRENT_LIST_DIR}/current\" _beam_selected_export)\ninclude(\"${_beam_selected_export}/package.cmake\")\n">>
+        end,
+        write_once(path(Destination,<<"BEAMPackageExport.cmake">>),Wrapper),
         case Apple of
             true -> write_once(path(Destination,<<"BEAMPackageExport.xcconfig">>),<<"#include \"current/package.xcconfig\"\n">>);
             false -> ok
         end,
-        _=beam_pkg_util:command(C,[<<"-E">>,<<"create_symlink">>,<<".generations/",Unique/binary>>,Pending],Destination),
-        rename(Pending,path(Destination,<<"current">>)),
+        case Windows of
+            true ->
+                %% A regular selector preserves atomic publication without
+                %% requiring Windows symbolic-link privileges.
+                write(Pending,["set(_beam_selected_export \"${CMAKE_CURRENT_LIST_DIR}/.generations/",Unique,"\")\n"]),
+                rename(Pending,path(Destination,<<"current.cmake">>));
+            false ->
+                _=beam_pkg_util:command(C,[<<"-E">>,<<"create_symlink">>,<<".generations/",Unique/binary>>,Pending],Destination),
+                rename(Pending,path(Destination,<<"current">>))
+        end,
         {ok,Destination}
     catch
         Class:Reason:Stack -> cleanup(Final),erlang:raise(Class,Reason,Stack)

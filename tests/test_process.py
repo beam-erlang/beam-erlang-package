@@ -30,13 +30,14 @@ class ProcessTests(unittest.TestCase):
     def test_live_descendant_is_rejected_and_stopped(self):
         source = ("import subprocess,sys;subprocess.Popen([sys.executable,'-c',"
                   "'import time;time.sleep(60)'],stdin=subprocess.DEVNULL,"
-                  "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)")
+                  "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=subprocess.DETACHED_PROCESS)")
         with self.assertRaisesRegex(AssertionError, 'descendants survived'):
             self.run_source(source)
 
     def test_timeout_stops_owned_tree(self):
         source = ("import subprocess,sys,time;subprocess.Popen([sys.executable,'-c',"
-                  "'import time;time.sleep(60)']);time.sleep(60)")
+                  "'import time;time.sleep(60)'],stdin=sys.stdin,stdout=sys.stdout,stderr=sys.stderr,"
+                  "creationflags=subprocess.DETACHED_PROCESS);time.sleep(60)")
         with self.assertRaises(subprocess.TimeoutExpired):
             self.run_source(source, timeout=0.3)
 

@@ -49,6 +49,9 @@ write = function('WriteFile', [w.HANDLE, c.c_void_p, w.DWORD, c.POINTER(w.DWORD)
 wait = function('WaitForSingleObject', [w.HANDLE, w.DWORD], w.DWORD)
 exit_code = function('GetExitCodeProcess', [w.HANDLE, c.POINTER(w.DWORD)])
 terminate_process = function('TerminateProcess', [w.HANDLE, w.UINT])
+get_standard_handle = function('GetStdHandle', [w.DWORD], w.HANDLE)
+set_standard_handle = function('SetStdHandle', [w.DWORD, w.HANDLE])
+console_launch_lock = threading.Lock()
 
 
 def success(hr):
@@ -74,8 +77,6 @@ class Terminal:
             checked(pipe(c.byref(self.output_handle), c.byref(output_write), None, 0))
             self.handles.extend([self.output_handle, output_write])
             success(create_console(Coord(columns, rows), input_read, output_write, 0, c.byref(self.console)))
-            checked(close(input_read)); self.handles.remove(input_read)
-            checked(close(output_write)); self.handles.remove(output_write)
             size = c.c_size_t()
             attributes(None, 1, 0, c.byref(size))
             storage = c.create_string_buffer(size.value)
@@ -91,11 +92,25 @@ class Terminal:
                 executable = Path(command[0])
                 if not executable.is_file():
                     executable = executable.with_suffix('.exe')
-                checked(create_process(str(executable), arguments, None, None, False,
-                    0x80000 | 0x400 | 4, block, str(cwd), c.byref(startup.basic), c.byref(self.process)))
+                # A runner's redirected standard handles otherwise override
+                # the new pseudoconsole's handles, even with inheritance off.
+                # Leave them unspecified during this serial launch and restore
+                # the runner before any child interaction or output observation.
+                with console_launch_lock:
+                    streams = [(kind, get_standard_handle(kind)) for kind in (0xfffffff6, 0xfffffff5, 0xfffffff4)]
+                    try:
+                        for kind, _ in streams:
+                            checked(set_standard_handle(kind, None))
+                        checked(create_process(str(executable), arguments, None, None, False,
+                            0x80000 | 0x400 | 4, block, str(cwd), c.byref(startup.basic), c.byref(self.process)))
+                    finally:
+                        for kind, handle in streams:
+                            checked(set_standard_handle(kind, handle))
                 checked(assign(self.job.handle, self.process.process))
                 if resume(self.process.thread) != 1:
                     raise AssertionError('ConPTY initial thread suspension changed')
+                checked(close(input_read)); self.handles.remove(input_read)
+                checked(close(output_write)); self.handles.remove(output_write)
             finally:
                 delete_attributes(storage)
             checked(close(self.process.thread)); self.process.thread = None

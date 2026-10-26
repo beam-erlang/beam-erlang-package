@@ -124,6 +124,9 @@ def main():
         run([exe, 'install', resource_only], work, 0, env)
         exported = work / 'resource export'
         run([exe, 'export', '--output', exported, resource_only], work, 0, env)
+        # Publishing another generation must replace the selection atomically,
+        # including Windows exports without symbolic-link privileges.
+        run([exe, 'export', '--output', exported, resource_only], work, 0, env)
         consumer_c = work / 'resource consumer'
         consumer_c.mkdir()
         (consumer_c / 'main.c').write_text('#include "registration.h"\n#include "package_inventory.h"\nint main(void) { return beam_package_inventory.count != 0 || beam_package_linked_nifs(0,0) != 0; }\n')

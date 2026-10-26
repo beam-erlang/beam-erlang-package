@@ -294,8 +294,10 @@ existing local workflow but must be reinstalled before export.
 
 ## Application export format 1
 
-An export contains complete generations beneath `.generations/`; `current` is a
-relative symlink switched by one atomic rename only after validation and staging.
+An export contains complete generations beneath `.generations/`. On Unix,
+`current` is a relative symlink; Windows uses a regular `current.cmake` selector
+so publication does not require symbolic-link privileges. Both are switched by
+one atomic rename only after validation and staging.
 The stable `BEAMPackageExport.cmake` entry selects it; Apple targets additionally
 emit `BEAMPackageExport.xcconfig`. A failed
 export preserves the previous selection. Copy the complete directory when

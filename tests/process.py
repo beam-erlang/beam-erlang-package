@@ -22,7 +22,7 @@ def capture(command, *, cwd, env, input=None, text=True, capture_output=True, ti
         child=subprocess.Popen(command,cwd=cwd,env=env,text=text,encoding='utf-8' if text else None,
             stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
             stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=not job,
-            creationflags=4 if job else 0,close_fds=True)
+            creationflags=(4 | subprocess.DETACHED_PROCESS) if job else 0,close_fds=True)
         if job:
             job.start(child)
     except BaseException:
